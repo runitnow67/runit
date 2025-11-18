@@ -4,42 +4,39 @@ const http = require("http");
 const { WebSocketServer } = require("ws");
 const cors = require("cors");
 
+// Express app
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// HTTP server (IMPORTANT)
 const server = http.createServer(app);
+
+// WebSocket server
 const wss = new WebSocketServer({ server });
 
-let providers = {};   // { sessionId: providerSocket }
-let renters = {};     // { sessionId: renterSocket }
+// Maps for provider and renter sockets
+let providers = {};
+let renters = {};
 
 console.log("Bridge server starting...");
 
-
-// ---------------------------
-// Provider connects
-// ---------------------------
-app.post("/provider/register", (req, res) => {
-  const sessionId = req.body.sessionId;
-
-  console.log("Provider registered for session:", sessionId);
-
-  res.json({ ok: true, message: "Provider registered", sessionId });
+// Basic test route
+app.get("/", (req, res) => {
+  res.send("Bridge server running");
 });
 
-
-// ---------------------------
 // WebSocket handling
-// ---------------------------
 wss.on("connection", (ws, req) => {
   const url = req.url;
+  console.log("WS connection:", url);
 
-  // Provider socket
+  // Provider WS
   if (url.startsWith("/ws/provider")) {
-    const sessionId = new URLSearchParams(url.replace("/ws/provider?", "")).get("sessionId");
-
-    console.log("Provider WebSocket connected for session:", sessionId);
+    const sessionId = new URLSearchParams(url.split("?")[1]).get("sessionId");
     providers[sessionId] = ws;
+
+    console.log("Provider connected:", sessionId);
 
     ws.on("message", (msg) => {
       if (renters[sessionId]) {
@@ -48,17 +45,17 @@ wss.on("connection", (ws, req) => {
     });
 
     ws.on("close", () => {
-      console.log("Provider disconnected:", sessionId);
       delete providers[sessionId];
+      console.log("Provider disconnected:", sessionId);
     });
   }
 
-  // Renter socket
-  else if (url.startsWith("/ws/renter")) {
-    const sessionId = new URLSearchParams(url.replace("/ws/renter?", "")).get("sessionId");
-
-    console.log("Renter WebSocket connected for session:", sessionId);
+  // Renter WS
+  if (url.startsWith("/ws/renter")) {
+    const sessionId = new URLSearchParams(url.split("?")[1]).get("sessionId");
     renters[sessionId] = ws;
+
+    console.log("Renter connected:", sessionId);
 
     ws.on("message", (msg) => {
       if (providers[sessionId]) {
@@ -67,22 +64,14 @@ wss.on("connection", (ws, req) => {
     });
 
     ws.on("close", () => {
-      console.log("Renter disconnected:", sessionId);
       delete renters[sessionId];
+      console.log("Renter disconnected:", sessionId);
     });
   }
 });
 
-
-app.get("/", (req, res) => {
-  res.send("GPU Rental Bridge Server Running ✔");
-});
-
-
-// ---------------------------
-// Start server
-// ---------------------------
+// IMPORTANT: Start HTTP + WS server together
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log("Bridge server listening on port", PORT);
+  console.log("Server running on port", PORT);
 });
