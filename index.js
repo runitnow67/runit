@@ -7,165 +7,152 @@ const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-/*
-  We keep maps:
-  - providers[sid] = ws (provider side)
-  - pendingHttpRequests[reqId] = {res, chunks}
-*/
-const providers = {};
-const renters = {};
-const pendingHttp = {}; // reqId -> res object
+const providers = {};     // sid -> providerWs
+const pendingHttp = {};   // reqId -> { res }
 
-console.log("Proxy bridge starting...");
+console.log("Classic-notebook proxy starting...");
 
-app.get("/", (req, res) => res.send("Proxy bridge running"));
+app.get("/", (req, res) => res.send("Classic Notebook proxy running"));
 
-// --- HTTP proxy entrypoint for renters ---
-// renter uses: GET/POST /session/:sid/*  (we'll forward verb, headers, body)
-app.all("/session/:sid/*", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
+// HTTP proxy: forward any /session/:sid/* request to provider
+app.all("/session/:sid/*", express.raw({ type: "*/*", limit: "100mb" }), (req, res) => {
   const sid = req.params.sid;
-  const providerWs = providers[sid];
-  if (!providerWs || providerWs.readyState !== providerWs.OPEN) {
+  const provider = providers[sid];
+  if (!provider || provider.readyState !== provider.OPEN) {
     return res.status(503).send("Provider not connected");
   }
 
-  // Create unique request id
   const reqId = uuidv4();
+  pendingHttp[reqId] = res;
 
-  // Build envelope for provider
   const envelope = {
     type: "http-request",
     reqId,
     method: req.method,
-    path: req.originalUrl.replace(`/session/${sid}`, ""), // path on provider
+    path: req.originalUrl.replace(`/session/${sid}`, "") || "/",
     headers: req.headers,
   };
 
-  // Store the express res to be completed when provider responds
-  pendingHttp[reqId] = res;
-
-  // Send the envelope header as JSON, then binary body (if any)
   try {
-    providerWs.send(JSON.stringify(envelope));
-    if (req.body && req.body.length) {
-      // send body as binary message
-      providerWs.send(req.body);
-    } else {
-      // send an empty marker
-      providerWs.send(JSON.stringify({ type: "http-body-empty", reqId }));
-    }
+    provider.send(JSON.stringify(envelope));
+    // send body (if any) as binary or empty marker
+    if (req.body && req.body.length) provider.send(req.body);
+    else provider.send(JSON.stringify({ type: "http-body-empty", reqId }));
   } catch (e) {
     delete pendingHttp[reqId];
-    return res.status(500).send("Error forwarding to provider");
+    return res.status(500).send("Forward error");
   }
 
-  // When provider replies using messages we will complete the response
+  // provider will later send http-response + http-body -> handled below in ws provider handler
 });
 
-// --- WebSocket server: handles provider and renter connections ---
-// Provider should connect to /ws/provider?sessionId=SID
+// WebSocket endpoint for kernel channels: renter opens this to talk to kernels
+// Example: wss://yourdomain/session-ws/test123?path=/api/kernels/<id>/channels
 wss.on("connection", (ws, req) => {
   const url = req.url || "";
-  console.log("WS connected:", url);
-
   if (url.startsWith("/ws/provider")) {
+    // provider connection
     const params = new URLSearchParams(url.split("?")[1] || "");
     const sid = params.get("sessionId");
-    if (!sid) {
-      ws.close();
-      return;
-    }
+    if (!sid) { ws.close(); return; }
     providers[sid] = ws;
-    console.log("Provider registered:", sid);
+    console.log("Provider connected:", sid);
 
-    // Provider messages may be either:
-    // - JSON strings with type fields (http-response metadata)
-    // - Binary chunks that belong to a pending request (we'll treat binary as body parts)
-
-    // We'll maintain small buffers per reqId on provider side if needed:
     ws.on("message", (msg) => {
-      // If Buffer or ArrayBuffer -> treat as binary body chunk
-      if (Buffer.isBuffer(msg) || msg instanceof ArrayBuffer) {
-        // provider must previously have sent a JSON header indicating next chunk belongs to reqId
-        // For simplicity provider sends a header JSON before binary chunks (see provider code)
-        // We won't try to decode ambiguous binary here.
-        console.log("Received unexpected binary from provider (ignored unless header used)");
+      // provider sends JSON control or binary http-body
+      if (Buffer.isBuffer(msg)) {
+        // ignore stray binary
         return;
       }
-
-      // text message
       let data;
       try { data = JSON.parse(msg.toString()); } catch (e) {
-        console.log("Provider text:", msg.toString());
-        return;
+        console.log("Provider raw:", msg.toString()); return;
       }
-
       if (data.type === "http-response") {
-        // data: { type: 'http-response', reqId, status, headers }
         const res = pendingHttp[data.reqId];
-        if (!res) {
-          console.log("No pending response for", data.reqId);
-          return;
-        }
-        // store status and headers; now wait for next binary message body or an 'http-body-empty' marker
+        if (!res) { console.log("No pending for", data.reqId); return; }
         res.statusCode = data.status || 200;
-        // set headers
         if (data.headers) {
-          for (const [k, v] of Object.entries(data.headers)) {
-            try { res.setHeader(k, v); } catch (e) {}
-          }
+          Object.entries(data.headers).forEach(([k,v]) => { try{ res.setHeader(k, v); }catch{} });
         }
-        // if provider indicates body follows as a binary frame, provider will send a Buffer next.
-        // We'll simply wait — provider will send a base64 string body message or a binary message.
       } else if (data.type === "http-body") {
-        // data: { type:'http-body', reqId, isBase64:false, body?: string (base64 if true) }
         const res = pendingHttp[data.reqId];
         if (!res) return;
-        if (data.isBase64 && data.body) {
-          const buff = Buffer.from(data.body, "base64");
-          res.end(buff);
-        } else if (data.body) {
-          res.end(data.body);
-        } else {
-          // no body, just end
-          res.end();
-        }
+        const buff = data.isBase64 ? Buffer.from(data.body, "base64") : Buffer.from(data.body || "");
+        res.end(buff);
         delete pendingHttp[data.reqId];
-      } else {
-        console.log("Provider message:", data);
+      } else if (data.type === "ws-proxy-open") {
+        // provider confirms it opened local WS for a kernel; map it if needed
+        // not used by server except logging
+      } else if (data.type === "ws-proxy-data") {
+        // server forwards to renter ws stored in data.renterConnId — implement if you track multiple renters
       }
     });
 
+    ws.on("close", () => { delete providers[sid]; console.log("Provider disconnected:", sid); });
+    return;
+  }
+
+  // Renter connecting to a kernel WS: /session-ws/:sid?path=...
+  if (url.startsWith("/session-ws/") || url.startsWith("/session-ws?") || url.startsWith("/ws/renter")) {
+    // parse path and sid
+    const raw = url.replace("/session-ws/", "").replace("/ws/renter", "");
+    const params = new URLSearchParams(url.split("?")[1] || "");
+    const sid = raw.split("?")[0] || params.get("sessionId") || (params.get("sid"));
+    const path = params.get("path") || decodeURIComponent((url.split("path=")[1]||""));
+    if (!sid) { ws.close(); return; }
+    const provider = providers[sid];
+    if (!provider || provider.readyState !== provider.OPEN) { ws.close(); return; }
+
+    // Generate an internal id for this renter ws so provider can map responses
+    const renterConnId = uuidv4();
+
+    // Instruct provider to open a local websocket to Jupyter at `path`
+    provider.send(JSON.stringify({
+      type: "ws-proxy-open",
+      renterConnId,
+      path
+    }));
+
+    // When renter sends data, forward to provider (provider will forward to local jupyter)
+    ws.on("message", (m) => {
+      // binary or text - send as base64 if binary
+      if (Buffer.isBuffer(m)) {
+        provider.send(JSON.stringify({ type: "ws-proxy-data-binary", renterConnId, payload: m.toString("base64") }));
+      } else {
+        provider.send(JSON.stringify({ type: "ws-proxy-data", renterConnId, payload: m.toString() }));
+      }
+    });
+
+    // provider will later send back ws-proxy-data messages which we need to forward to this ws.
+    // To simplify, provider will send ws-proxy-back messages with renterConnId and payload, server will route them.
+    // Implement a small route table:
+    const routeKey = renterConnId;
+    if (!wss.routeMap) wss.routeMap = {};
+    wss.routeMap[routeKey] = ws;
+
     ws.on("close", () => {
-      console.log("Provider disconnected:", sid);
-      delete providers[sid];
+      provider.send(JSON.stringify({ type: "ws-proxy-close", renterConnId }));
+      delete wss.routeMap[routeKey];
     });
 
     return;
   }
 
-  // Renter WS (we keep for possible future ws-channel proxying)
-  if (url.startsWith("/ws/renter")) {
-    const params = new URLSearchParams(url.split("?")[1] || "");
-    const sid = params.get("sessionId");
-    // we don't need to do much here now, renters will use HTTP for Jupyter pages;
-    renters[sid] = ws;
-    ws.on("message", (m) => {
-      // Potential future: forward kernel WS channels
-      console.log("Renter ws message:", typeof m);
-    });
-    ws.on("close", () => delete renters[sid]);
-  }
+  console.log("Unknown WS connection:", url);
+  ws.close();
 });
 
-// Helper: allow provider to send HTTP response body in base64 if necessary
-// Provider side will send: JSON { type: 'http-response', reqId, status, headers }
-// then send: JSON { type:'http-body', reqId, isBase64: true, body: '<base64>' }
+// For provider -> server routing of ws-proxy-back messages we need provider to send messages with type "ws-proxy-back"
+wss.on("connection", (ws) => {
+  // handled in the above on connection, but the provider handler will forward messages and server should route them
+});
 
+// Start
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log("Proxy bridge listening on", PORT));
+server.listen(PORT, () => console.log("Proxy listening on", PORT));
