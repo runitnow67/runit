@@ -8,16 +8,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-/**
- * sessionId -> {
- *   sessionId,
- *   providerId,
- *   publicUrl,
- *   token,
- *   status,
- *   createdAt
- * }
- */
 const sessions = {};
 
 // Health check
@@ -25,37 +15,12 @@ app.get("/", (req, res) => {
   res.send("RUNIT control plane running ✅");
 });
 
-/**
- * Provider registers a ready notebook session
- */
-// app.post("/provider/session", (req, res) => {
-//   const { providerId, publicUrl, token } = req.body;
-
-//   if (!providerId || !publicUrl || !token) {
-//     return res.status(400).json({ error: "missing fields" });
-//   }
-
-//   const sessionId = crypto.randomUUID();
-
-//   sessions[sessionId] = {
-//     sessionId,
-//     providerId,
-//     publicUrl,
-//     token,
-//     status: "READY",
-//     createdAt: Date.now()
-//   };
-
-//   console.log("[server] session registered:", sessionId);
-
-//   res.json({ sessionId });
-// });
+// Provider registers session
 app.post("/provider/session", (req, res) => {
   try {
     const { providerId, publicUrl, token } = req.body || {};
 
     if (!providerId || !publicUrl || !token) {
-      console.error("[server] invalid provider payload:", req.body);
       return res.status(400).json({ error: "invalid payload" });
     }
 
@@ -67,30 +32,27 @@ app.post("/provider/session", (req, res) => {
       publicUrl,
       token,
       status: "READY",
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      lastSeen: Date.now()
     };
 
     console.log("[server] session registered:", sessionId);
-
     res.json({ sessionId });
+
   } catch (err) {
     console.error("[server] provider/session error:", err);
     res.status(500).json({ error: "internal error" });
   }
 });
-/**
- * Renter requests a notebook
- */
+
+// Renter requests session
 app.post("/renter/request", (req, res) => {
-  const session = Object.values(sessions).find(
-    s => s.status === "READY"
-  );
+  const session = Object.values(sessions)
+    .find(s => s.status === "READY");
 
   if (!session) {
     return res.status(404).json({ error: "no sessions available" });
   }
-
-  // session.status = "ASSIGNED";
 
   res.json({
     sessionId: session.sessionId,
@@ -98,10 +60,8 @@ app.post("/renter/request", (req, res) => {
     token: session.token
   });
 });
-/**
- *Heartbeat section
- */
 
+// Provider heartbeat
 app.post("/provider/heartbeat", (req, res) => {
   const { sessionId } = req.body || {};
 
@@ -113,10 +73,8 @@ app.post("/provider/heartbeat", (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- *Add a cleanup loop in server/index.js:
- */
-const SESSION_TTL = 2 * 60 * 1000; // 2 minutes
+// Cleanup stale sessions
+const SESSION_TTL = 2 * 60 * 1000;
 
 setInterval(() => {
   const now = Date.now();
