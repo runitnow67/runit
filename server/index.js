@@ -98,6 +98,20 @@ app.post("/renter/request", (req, res) => {
     token: session.token
   });
 });
+/**
+ *Heartbeat section
+ */
+
+app.post("/provider/heartbeat", (req, res) => {
+  const { sessionId } = req.body || {};
+
+  if (!sessionId || !sessions[sessionId]) {
+    return res.status(404).json({ error: "unknown session" });
+  }
+
+  sessions[sessionId].lastSeen = Date.now();
+  res.json({ ok: true });
+});
 
 app.listen(PORT, () => {
   console.log(`RUNIT server listening on port ${PORT}`);
