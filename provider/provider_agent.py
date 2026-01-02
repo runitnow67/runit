@@ -87,6 +87,21 @@ threading.Thread(
     args=(CURRENT_SESSION_ID,),
     daemon=True
 ).start()
+LAST_ACTIVITY = time.time()
+IDLE_TIMEOUT = 10 * 60  # 10 minutes
+
+def idle_monitor(container_proc):
+    while True:
+        if time.time() - LAST_ACTIVITY > IDLE_TIMEOUT:
+            print("[agent] idle timeout reached, stopping container")
+            container_proc.terminate()
+            break
+        time.sleep(30)
+threading.Thread(
+    target=idle_monitor,
+    args=(docker_proc,),
+    daemon=True
+).start()
 
 def main():
     jupyter_proc, token = start_jupyter()
