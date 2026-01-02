@@ -7,9 +7,14 @@
     <script>
       async function start() {
         const res = await fetch(
-          "https://YOUR_RENDER_URL.onrender.com/renter/request",
+          "https://runit-p5ah.onrender.com/renter/request",
           { method: "POST" }
         );
+
+        if (!res.ok) {
+          alert("No sessions available or server error");
+          return;
+        }
 
         const data = await res.json();
 
