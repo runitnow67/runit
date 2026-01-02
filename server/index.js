@@ -65,6 +65,8 @@ app.post("/renter/request", (req, res) => {
 app.post("/provider/heartbeat", (req, res) => {
   const { sessionId } = req.body || {};
 
+  console.log("[server] heartbeat received for:", sessionId);
+
   if (!sessionId || !sessions[sessionId]) {
     return res.status(404).json({ error: "unknown session" });
   }
