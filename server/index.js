@@ -90,7 +90,7 @@ app.post("/renter/request", (req, res) => {
     return res.status(404).json({ error: "no sessions available" });
   }
 
-  session.status = "ASSIGNED";
+  // session.status = "ASSIGNED";
 
   res.json({
     sessionId: session.sessionId,
