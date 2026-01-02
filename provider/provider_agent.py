@@ -4,22 +4,25 @@ import time
 import re
 import uuid
 import requests
+import threading
 
 JUPYTER_PORT = 8888
-SERVER_URL = "https://runit-p5ah.onrender.com"  # change this
+SERVER_URL = "https://runit-p5ah.onrender.com"
 PROVIDER_ID = str(uuid.uuid4())
-session_id = resp.json()["sessionId"]
-CURRENT_SESSION_ID = session_id
 
-def start_jupyter():
-    print("[agent] starting jupyter...")
+LAST_ACTIVITY = time.time()
+IDLE_TIMEOUT = 10 * 60  # 10 minutes
+
+
+def start_docker_jupyter():
+    print("[agent] starting dockerized jupyter...")
 
     cmd = [
-        sys.executable, "-m", "jupyter", "lab",
-        "--no-browser",
-        "--ip=0.0.0.0",
-        f"--port={JUPYTER_PORT}",
-        "--ServerApp.allow_remote_access=True"
+        "docker", "run",
+        "--rm",
+        "-p", "8888:8888",
+        "--name", "runit-session",
+        "runit-jupyter"
     ]
 
     proc = subprocess.Popen(
@@ -31,11 +34,12 @@ def start_jupyter():
 
     token = None
     for line in proc.stdout:
-        print("[jupyter]", line.strip())
+        print("[docker]", line.strip())
         if "token=" in line and token is None:
             m = re.search(r"token=([a-z0-9]+)", line)
             if m:
                 token = m.group(1)
+                print("[agent] token detected:", token)
                 break
 
     return proc, token
@@ -69,6 +73,7 @@ def start_cloudflared():
 
     return proc, public_url
 
+
 def heartbeat_loop(session_id):
     while True:
         try:
@@ -81,30 +86,22 @@ def heartbeat_loop(session_id):
             pass
         time.sleep(30)
 
-import threading
-threading.Thread(
-    target=heartbeat_loop,
-    args=(CURRENT_SESSION_ID,),
-    daemon=True
-).start()
-LAST_ACTIVITY = time.time()
-IDLE_TIMEOUT = 10 * 60  # 10 minutes
 
 def idle_monitor(container_proc):
+    global LAST_ACTIVITY
+
     while True:
         if time.time() - LAST_ACTIVITY > IDLE_TIMEOUT:
             print("[agent] idle timeout reached, stopping container")
             container_proc.terminate()
             break
         time.sleep(30)
-threading.Thread(
-    target=idle_monitor,
-    args=(docker_proc,),
-    daemon=True
-).start()
+
 
 def main():
-    jupyter_proc, token = start_jupyter()
+    global LAST_ACTIVITY
+
+    docker_proc, token = start_docker_jupyter()
     time.sleep(2)
 
     cloudflared_proc, public_url = start_cloudflared()
@@ -120,24 +117,34 @@ def main():
         "token": token
     }
 
-    # resp = requests.post(f"{SERVER_URL}/provider/session", json=payload)
-    # print("[agent] registered session:", resp.json())
     resp = requests.post(f"{SERVER_URL}/provider/session", json=payload)
 
-    print("[agent] server status code:", resp.status_code)
-    print("[agent] server raw response:", resp.text)
-
-    if resp.ok:
-        print("[agent] session registered successfully")
-    else:
+    if not resp.ok:
         print("[agent] session registration FAILED")
+        print(resp.text)
+        return
+
+    session_id = resp.json()["sessionId"]
+    print("[agent] session registered:", session_id)
+
+    threading.Thread(
+        target=heartbeat_loop,
+        args=(session_id,),
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=idle_monitor,
+        args=(docker_proc,),
+        daemon=True
+    ).start()
 
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n[agent] shutting down")
-        jupyter_proc.terminate()
+        docker_proc.terminate()
         cloudflared_proc.terminate()
 
 
