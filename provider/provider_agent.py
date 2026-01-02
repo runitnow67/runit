@@ -60,9 +60,10 @@ def start_cloudflared():
     public_url = None
     for line in proc.stdout:
         print("[cloudflared]", line.strip())
-        m = re.search(r"https://[a-zA-Z0-9\\-]+\\.trycloudflare\\.com", line)
+        m = re.search(r"https://.*\.trycloudflare\.com", line)
         if m:
             public_url = m.group(0)
+            print("[agent] detected public URL:", public_url)
             break
 
     return proc, public_url
@@ -85,8 +86,17 @@ def main():
         "token": token
     }
 
+    # resp = requests.post(f"{SERVER_URL}/provider/session", json=payload)
+    # print("[agent] registered session:", resp.json())
     resp = requests.post(f"{SERVER_URL}/provider/session", json=payload)
-    print("[agent] registered session:", resp.json())
+
+    print("[agent] server status code:", resp.status_code)
+    print("[agent] server raw response:", resp.text)
+
+    if resp.ok:
+        print("[agent] session registered successfully")
+    else:
+        print("[agent] session registration FAILED")
 
     try:
         while True:
