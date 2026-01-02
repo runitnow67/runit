@@ -28,29 +28,56 @@ app.get("/", (req, res) => {
 /**
  * Provider registers a ready notebook session
  */
+// app.post("/provider/session", (req, res) => {
+//   const { providerId, publicUrl, token } = req.body;
+
+//   if (!providerId || !publicUrl || !token) {
+//     return res.status(400).json({ error: "missing fields" });
+//   }
+
+//   const sessionId = crypto.randomUUID();
+
+//   sessions[sessionId] = {
+//     sessionId,
+//     providerId,
+//     publicUrl,
+//     token,
+//     status: "READY",
+//     createdAt: Date.now()
+//   };
+
+//   console.log("[server] session registered:", sessionId);
+
+//   res.json({ sessionId });
+// });
 app.post("/provider/session", (req, res) => {
-  const { providerId, publicUrl, token } = req.body;
+  try {
+    const { providerId, publicUrl, token } = req.body || {};
 
-  if (!providerId || !publicUrl || !token) {
-    return res.status(400).json({ error: "missing fields" });
+    if (!providerId || !publicUrl || !token) {
+      console.error("[server] invalid provider payload:", req.body);
+      return res.status(400).json({ error: "invalid payload" });
+    }
+
+    const sessionId = crypto.randomUUID();
+
+    sessions[sessionId] = {
+      sessionId,
+      providerId,
+      publicUrl,
+      token,
+      status: "READY",
+      createdAt: Date.now()
+    };
+
+    console.log("[server] session registered:", sessionId);
+
+    res.json({ sessionId });
+  } catch (err) {
+    console.error("[server] provider/session error:", err);
+    res.status(500).json({ error: "internal error" });
   }
-
-  const sessionId = crypto.randomUUID();
-
-  sessions[sessionId] = {
-    sessionId,
-    providerId,
-    publicUrl,
-    token,
-    status: "READY",
-    createdAt: Date.now()
-  };
-
-  console.log("[server] session registered:", sessionId);
-
-  res.json({ sessionId });
 });
-
 /**
  * Renter requests a notebook
  */
