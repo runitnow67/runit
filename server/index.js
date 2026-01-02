@@ -113,6 +113,22 @@ app.post("/provider/heartbeat", (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ *Add a cleanup loop in server/index.js:
+ */
+const SESSION_TTL = 2 * 60 * 1000; // 2 minutes
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [id, session] of Object.entries(sessions)) {
+    if (now - session.lastSeen > SESSION_TTL) {
+      console.log("[server] removing stale session:", id);
+      delete sessions[id];
+    }
+  }
+}, 30 * 1000);
+
 app.listen(PORT, () => {
   console.log(`RUNIT server listening on port ${PORT}`);
 });
