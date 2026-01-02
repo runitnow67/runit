@@ -6,7 +6,7 @@ import uuid
 import requests
 
 JUPYTER_PORT = 8888
-SERVER_URL = "https://YOUR_RENDER_URL.onrender.com"  # change this
+SERVER_URL = "https://runit-p5ah.onrender.com"  # change this
 PROVIDER_ID = str(uuid.uuid4())
 
 
