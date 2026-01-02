@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h2>RUNIT – Start Notebook</h2>
+    <button onclick="start()">Start Session</button>
+
+    <script>
+      async function start() {
+        const res = await fetch(
+          "https://YOUR_RENDER_URL.onrender.com/renter/request",
+          { method: "POST" }
+        );
+
+        const data = await res.json();
+
+        const url = `${data.publicUrl}/lab?token=${data.token}`;
+        window.open(url, "_blank");
+      }
+    </script>
+  </body>
+</html>
