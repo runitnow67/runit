@@ -8,7 +8,8 @@ import requests
 JUPYTER_PORT = 8888
 SERVER_URL = "https://runit-p5ah.onrender.com"  # change this
 PROVIDER_ID = str(uuid.uuid4())
-
+session_id = resp.json()["sessionId"]
+CURRENT_SESSION_ID = session_id
 
 def start_jupyter():
     print("[agent] starting jupyter...")
@@ -68,6 +69,24 @@ def start_cloudflared():
 
     return proc, public_url
 
+def heartbeat_loop(session_id):
+    while True:
+        try:
+            requests.post(
+                f"{SERVER_URL}/provider/heartbeat",
+                json={"sessionId": session_id},
+                timeout=5
+            )
+        except Exception:
+            pass
+        time.sleep(30)
+
+import threading
+threading.Thread(
+    target=heartbeat_loop,
+    args=(CURRENT_SESSION_ID,),
+    daemon=True
+).start()
 
 def main():
     jupyter_proc, token = start_jupyter()
