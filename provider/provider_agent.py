@@ -35,12 +35,19 @@ def start_docker_jupyter():
     token = None
     for line in proc.stdout:
         print("[docker]", line.strip())
+
+        if "Error response from daemon" in line:
+            raise RuntimeError("Docker container failed to start")
+
         if "token=" in line and token is None:
             m = re.search(r"token=([a-z0-9]+)", line)
             if m:
                 token = m.group(1)
                 print("[agent] token detected:", token)
                 break
+
+    if not token:
+        raise RuntimeError("Jupyter token not found; aborting")
 
     return proc, token
 
@@ -101,7 +108,12 @@ def idle_monitor(container_proc):
 def main():
     global LAST_ACTIVITY
 
-    docker_proc, token = start_docker_jupyter()
+    try:
+        docker_proc, token = start_docker_jupyter()
+    except Exception as e:
+        print("[agent] startup failed:", e)
+        return
+
     time.sleep(2)
 
     cloudflared_proc, public_url = start_cloudflared()
