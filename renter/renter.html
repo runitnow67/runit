@@ -39,6 +39,9 @@
     </div>
 
     <script>
+      let currentAccessToken = null;
+      let heartbeatInterval = null;
+
       async function loadSessions() {
         try {
           const res = await fetch(
@@ -89,9 +92,56 @@
       }
 
       async function connectSession(accessToken) {
+        currentAccessToken = accessToken;
+        
+        // Start heartbeat to prove we're still connected
+        startHeartbeat(accessToken);
+        
         const url = `https://runit-p5ah.onrender.com/access/${accessToken}`;
         window.open(url, "_blank");
       }
+
+      function startHeartbeat(accessToken) {
+        // Stop any existing heartbeat
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+        }
+
+        // Send heartbeat every 30 seconds
+        heartbeatInterval = setInterval(async () => {
+          try {
+            await fetch(
+              `https://runit-p5ah.onrender.com/renter/heartbeat/${accessToken}`,
+              { method: "POST" }
+            );
+          } catch (err) {
+            console.error("Heartbeat failed:", err);
+          }
+        }, 30000);
+      }
+
+      async function releaseSession(accessToken) {
+        if (!accessToken) return;
+        
+        try {
+          await fetch(
+            `https://runit-p5ah.onrender.com/renter/release/${accessToken}`,
+            { method: "POST", keepalive: true }
+          );
+        } catch (err) {
+          console.error("Release failed:", err);
+        }
+      }
+
+      // Release session when user closes page
+      window.addEventListener('beforeunload', () => {
+        if (currentAccessToken) {
+          releaseSession(currentAccessToken);
+        }
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+        }
+      });
 
       // Load sessions when page loads
       loadSessions();
