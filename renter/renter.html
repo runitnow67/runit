@@ -4,35 +4,30 @@
     <h2>RUNIT – Start Notebook</h2>
     <button onclick="start()">Start Session</button>
 
+    <p id="info"></p>
+
     <script>
-async function start() {
-  const res = await fetch(
-    "https://runit-p5ah.onrender.com/renter/request",
-    { method: "POST" }
-  );
+      async function start() {
+        const res = await fetch(
+          "https://runit-p5ah.onrender.com/renter/request",
+          { method: "POST" }
+        );
 
-  if (!res.ok) {
-    alert("No sessions available");
-    return;
-  }
+        if (!res.ok) {
+          alert("No sessions available");
+          return;
+        }
 
-  const data = await res.json();
-  const url = `https://runit-p5ah.onrender.com/access/${data.accessToken}`;
-  window.open(url, "_blank");
-}
-</script>
-<p id="info"></p>
+        const data = await res.json();
 
-<script>
-async function start() {
-  const res = await fetch("/renter/request", { method: "POST" });
-  const data = await res.json();
+        // Show hardware & pricing
+        document.getElementById("info").innerText =
+          `GPU: ${data.hardware?.gpu || "N/A"}, RAM: ${data.hardware?.ram_gb || "?"}GB, $${data.pricing?.hourlyUsd || "?"}/hr`;
 
-  document.getElementById("info").innerText =
-    `GPU: ${data.hardware.gpu}, RAM: ${data.hardware.ram_gb}GB, $${data.pricing.hourlyUsd}/hr`;
-
-  window.open(`/access/${data.accessToken}`, "_blank");
-}
-</script>
+        // Redirect through control plane
+        const url = `https://runit-p5ah.onrender.com/access/${data.accessToken}`;
+        window.open(url, "_blank");
+      }
+    </script>
   </body>
 </html>
