@@ -115,16 +115,37 @@ def start_cloudflared():
     return proc, public_url
 
 
-def heartbeat_loop(session_id):
+def heartbeat_loop(session_id, payload):
+    """Send heartbeats to server. If 404, server restarted - re-register needed."""
     while True:
         try:
-            requests.post(
+            resp = requests.post(
                 f"{SERVER_URL}/provider/heartbeat",
                 json={"sessionId": session_id},
                 timeout=5
             )
-        except Exception:
-            pass
+            
+            if resp.status_code == 404:
+                print("[agent] server returned 404 - attempting to re-register...")
+                try:
+                    resp = requests.post(
+                        f"{SERVER_URL}/provider/session",
+                        json=payload,
+                        timeout=5
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    new_session_id = data["sessionId"]
+                    print("[agent] re-registered with new session ID:", new_session_id)
+                    session_id = new_session_id
+                except Exception as e:
+                    print("[agent] re-registration failed:", e)
+            elif resp.status_code != 200:
+                print("[agent] heartbeat returned:", resp.status_code)
+                
+        except Exception as e:
+            print("[agent] heartbeat error:", e)
+        
         time.sleep(30)
 
 
@@ -247,10 +268,10 @@ def main():
     print("[agent] session registered:", SESSION_ID)
     print("[agent] access token issued (stored server-side)")
 
-    # ❤️ heartbeat
+    # ❤️ heartbeat (with auto re-registration if needed)
     threading.Thread(
         target=heartbeat_loop,
-        args=(SESSION_ID,),
+        args=(SESSION_ID, payload),
         daemon=True
     ).start()
 
