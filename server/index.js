@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const providers = {}; // providerId -> { createdAt }
+const accessTokens = {}; // accessToken -> sessionId
 
 const app = express();
 app.use(cors());
@@ -17,27 +19,41 @@ app.get("/", (req, res) => {
 
 // Provider registers session
 app.post("/provider/session", (req, res) => {
-  try {
-    const { providerId, publicUrl, token } = req.body || {};
+  const { providerId, publicUrl, token } = req.body || {};
 
-    if (!providerId || !publicUrl || !token) {
-      return res.status(400).json({ error: "invalid payload" });
-    }
+  if (!providerId || !publicUrl || !token) {
+    return res.status(400).json({ error: "invalid payload" });
+  }
 
-    const sessionId = crypto.randomUUID();
-
-    sessions[sessionId] = {
-      sessionId,
+  // register provider if first time
+  if (!providers[providerId]) {
+    providers[providerId] = {
       providerId,
-      publicUrl,
-      token,
-      status: "READY",
-      createdAt: Date.now(),
-      lastSeen: Date.now()
+      createdAt: Date.now()
     };
+  }
 
-    console.log("[server] session registered:", sessionId);
-    res.json({ sessionId });
+  const sessionId = crypto.randomUUID();
+  const accessToken = crypto.randomUUID();
+
+  sessions[sessionId] = {
+    sessionId,
+    providerId,
+    publicUrl,
+    jupyterToken: token, // 🔒 private
+    status: "READY",
+    createdAt: Date.now(),
+    lastSeen: Date.now()
+  };
+
+  accessTokens[accessToken] = sessionId;
+
+  console.log("[server] session registered:", sessionId);
+
+  res.json({
+    sessionId,
+    accessToken
+  });
 
   } catch (err) {
     console.error("[server] provider/session error:", err);
@@ -47,19 +63,42 @@ app.post("/provider/session", (req, res) => {
 
 // Renter requests session
 app.post("/renter/request", (req, res) => {
-  const session = Object.values(sessions)
-    .find(s => s.status === "READY");
+  const session = Object.values(sessions).find(
+    s => s.status === "READY"
+  );
 
   if (!session) {
     return res.status(404).json({ error: "no sessions available" });
   }
 
+  const accessToken = Object.keys(accessTokens).find(
+    t => accessTokens[t] === session.sessionId
+  );
+
   res.json({
-    sessionId: session.sessionId,
-    publicUrl: session.publicUrl,
-    token: session.token
+    accessToken
   });
 });
+
+app.get("/access/:accessToken", (req, res) => {
+  const { accessToken } = req.params;
+  const sessionId = accessTokens[accessToken];
+
+  if (!sessionId) {
+    return res.status(403).send("Invalid or expired token");
+  }
+
+  const session = sessions[sessionId];
+  if (!session) {
+    return res.status(404).send("Session not found");
+  }
+
+  const redirectUrl =
+    `${session.publicUrl}/lab?token=${session.jupyterToken}`;
+
+  res.redirect(302, redirectUrl);
+});
+
 
 // Provider heartbeat
 app.post("/provider/heartbeat", (req, res) => {
