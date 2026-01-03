@@ -72,7 +72,7 @@
                   <strong>Price:</strong> $${session.pricing?.hourlyUsd || "?"}​/hr
                 </div>
               </div>
-              <button onclick="connectSession('${session.accessToken}')">
+              <button onclick="this.disabled=true; connectSession('${session.accessToken}')">
                 Connect
               </button>
             </div>
