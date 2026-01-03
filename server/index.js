@@ -20,7 +20,7 @@ app.get("/", (req, res) => {
 // Provider registers session
 app.post("/provider/session", (req, res) => {
   try {
-    const { providerId, publicUrl, token } = req.body || {};
+    const { providerId, publicUrl, token, hardware, pricing } = req.body || {};
 
     if (!providerId || !publicUrl || !token) {
       return res.status(400).json({ error: "invalid payload" });
@@ -41,7 +41,9 @@ app.post("/provider/session", (req, res) => {
       sessionId,
       providerId,
       publicUrl,
-      jupyterToken: token, // 🔒 private
+      jupyterToken: token,
+      hardware,
+      pricing,
       status: "READY",
       createdAt: Date.now(),
       lastSeen: Date.now()
@@ -76,7 +78,9 @@ app.post("/renter/request", (req, res) => {
   );
 
   res.json({
-    accessToken
+    accessToken,
+    hardware: session.hardware,
+    pricing: session.pricing
   });
 });
 
