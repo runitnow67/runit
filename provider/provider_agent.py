@@ -13,6 +13,40 @@ PROVIDER_ID = str(uuid.uuid4())
 LAST_ACTIVITY = time.time()
 IDLE_TIMEOUT = 10 * 60  # 10 minutes
 
+def ensure_docker_image():
+    image_name = "runit-jupyter"
+
+    print("[agent] checking docker image:", image_name)
+
+    result = subprocess.run(
+        ["docker", "images", "-q", image_name],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError("Docker not available")
+
+    if result.stdout.strip():
+        print("[agent] docker image exists")
+        return
+
+    print("[agent] docker image not found, building...")
+
+    build = subprocess.Popen(
+        ["docker", "build", "-t", image_name, "."],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    for line in build.stdout:
+        print("[docker-build]", line.strip())
+
+    if build.wait() != 0:
+        raise RuntimeError("Docker image build failed")
+
+    print("[agent] docker image built successfully")
 
 def start_docker_jupyter():
     print("[agent] starting dockerized jupyter...")
@@ -109,6 +143,7 @@ def main():
     global LAST_ACTIVITY
 
     try:
+        ensure_docker_image()
         docker_proc, token = start_docker_jupyter()
     except Exception as e:
         print("[agent] startup failed:", e)
