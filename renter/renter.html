@@ -21,5 +21,18 @@ async function start() {
   window.open(url, "_blank");
 }
 </script>
+<p id="info"></p>
+
+<script>
+async function start() {
+  const res = await fetch("/renter/request", { method: "POST" });
+  const data = await res.json();
+
+  document.getElementById("info").innerText =
+    `GPU: ${data.hardware.gpu}, RAM: ${data.hardware.ram_gb}GB, $${data.pricing.hourlyUsd}/hr`;
+
+  window.open(`/access/${data.accessToken}`, "_blank");
+}
+</script>
   </body>
 </html>
