@@ -19,48 +19,48 @@ app.get("/", (req, res) => {
 
 // Provider registers session
 app.post("/provider/session", (req, res) => {
-  const { providerId, publicUrl, token } = req.body || {};
+  try {
+    const { providerId, publicUrl, token } = req.body || {};
 
-  if (!providerId || !publicUrl || !token) {
-    return res.status(400).json({ error: "invalid payload" });
-  }
+    if (!providerId || !publicUrl || !token) {
+      return res.status(400).json({ error: "invalid payload" });
+    }
 
-  // register provider if first time
-  if (!providers[providerId]) {
-    providers[providerId] = {
+    // register provider if first time
+    if (!providers[providerId]) {
+      providers[providerId] = {
+        providerId,
+        createdAt: Date.now()
+      };
+    }
+
+    const sessionId = crypto.randomUUID();
+    const accessToken = crypto.randomUUID();
+
+    sessions[sessionId] = {
+      sessionId,
       providerId,
-      createdAt: Date.now()
+      publicUrl,
+      jupyterToken: token, // 🔒 private
+      status: "READY",
+      createdAt: Date.now(),
+      lastSeen: Date.now()
     };
-  }
 
-  const sessionId = crypto.randomUUID();
-  const accessToken = crypto.randomUUID();
+    accessTokens[accessToken] = sessionId;
 
-  sessions[sessionId] = {
-    sessionId,
-    providerId,
-    publicUrl,
-    jupyterToken: token, // 🔒 private
-    status: "READY",
-    createdAt: Date.now(),
-    lastSeen: Date.now()
-  };
+    console.log("[server] session registered:", sessionId);
 
-  accessTokens[accessToken] = sessionId;
-
-  console.log("[server] session registered:", sessionId);
-
-  res.json({
-    sessionId,
-    accessToken
-  });
+    res.json({
+      sessionId,
+      accessToken
+    });
 
   } catch (err) {
     console.error("[server] provider/session error:", err);
     res.status(500).json({ error: "internal error" });
   }
 });
-
 // Renter requests session
 app.post("/renter/request", (req, res) => {
   const session = Object.values(sessions).find(
