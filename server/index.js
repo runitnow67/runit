@@ -127,13 +127,17 @@ app.get("/access/:accessToken", (req, res) => {
 app.post("/provider/heartbeat", (req, res) => {
   const { sessionId } = req.body || {};
 
-  console.log("[server] heartbeat received for:", sessionId);
+  if (!sessionId) {
+    return res.status(400).json({ error: "missing sessionId" });
+  }
 
-  if (!sessionId || !sessions[sessionId]) {
-    return res.status(404).json({ error: "unknown session" });
+  if (!sessions[sessionId]) {
+    console.log("[server] heartbeat for unknown session (server may have restarted):", sessionId);
+    return res.status(404).json({ error: "unknown session - re-register required" });
   }
 
   sessions[sessionId].lastSeen = Date.now();
+  console.log("[server] heartbeat updated for:", sessionId, "| Total active sessions:", Object.keys(sessions).length);
   res.json({ ok: true });
 });
 
