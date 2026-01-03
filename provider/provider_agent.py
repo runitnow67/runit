@@ -138,6 +138,56 @@ def idle_monitor(container_proc):
             break
         time.sleep(30)
 
+def detect_hardware():
+    gpu = "CPU"
+    vram_gb = 0
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            line = result.stdout.strip().split("\n")[0]
+            name, mem = line.split(",")
+            gpu = name.strip()
+            vram_gb = int(mem.strip().split()[0]) // 1024
+    except Exception:
+        pass
+
+    # macOS / Apple Silicon (best-effort)
+    if gpu == "CPU" and sys.platform == "darwin":
+        gpu = "Apple Silicon"
+        vram_gb = 0  # unified memory
+
+    ram_gb = int(
+        subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True
+        ).stdout.strip()
+    ) // (1024**3)
+
+    return {
+        "gpu": gpu,
+        "vram_gb": vram_gb,
+        "ram_gb": ram_gb
+    }
+
+def estimate_price(hardware):
+    gpu = hardware["gpu"]
+
+    if "A100" in gpu:
+        return 3.00
+    if "4090" in gpu:
+        return 1.80
+    if "Apple" in gpu:
+        return 0.50
+
+    return 0.20  # CPU default
+
 
 def main():
     global LAST_ACTIVITY
@@ -157,12 +207,19 @@ def main():
     print("URL  :", public_url)
     print("TOKEN:", token)
     print("====================\n")
-
+    
+    hardware = detect_hardware()
+    price_per_hour = estimate_price(hardware)
+    
     payload = {
-        "providerId": PROVIDER_ID,
-        "publicUrl": public_url,
-        "token": token
+    "providerId": PROVIDER_ID,
+    "publicUrl": public_url,
+    "token": token,
+    "hardware": hardware,
+    "pricing": {
+        "hourlyUsd": price_per_hour
     }
+}
 
     # 🔁 retry registration until success
     while True:
