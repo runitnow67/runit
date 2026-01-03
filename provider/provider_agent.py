@@ -10,7 +10,8 @@ JUPYTER_PORT = 8888
 SERVER_URL = "https://runit-p5ah.onrender.com"
 PROVIDER_ID = str(uuid.uuid4())
 
-LAST_ACTIVITY = time.time()
+# Track actual container activity
+LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
 IDLE_TIMEOUT = 10 * 60  # 10 minutes
 
 def ensure_docker_image():
@@ -149,8 +150,37 @@ def heartbeat_loop(session_id, payload):
         time.sleep(30)
 
 
+def check_container_activity():
+    """Check if container has network activity (actual usage)."""
+    global LAST_CONTAINER_ACTIVITY
+    
+    try:
+        result = subprocess.run(
+            ["docker", "stats", "runit-session", "--no-stream", "--format", "{{.NetIO}}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            net_io = result.stdout.strip()
+            
+            # Compare with previous reading
+            if LAST_CONTAINER_ACTIVITY["prev_net_io"] != net_io:
+                LAST_CONTAINER_ACTIVITY["time"] = time.time()
+                LAST_CONTAINER_ACTIVITY["prev_net_io"] = net_io
+                return True
+            
+    except Exception:
+        pass
+    
+    return False
+
+
 def idle_monitor(container_proc, session_id):
-    """Monitor idle timeout, but don't kill container if session is LOCKED."""
+    """Monitor idle timeout with actual container activity detection."""
+    global LAST_CONTAINER_ACTIVITY
+    
     while True:
         # Check if container is still running
         if container_proc.poll() is not None:
@@ -158,6 +188,7 @@ def idle_monitor(container_proc, session_id):
             break
 
         # Check if session is locked (in use by a renter)
+        session_locked = False
         try:
             res = requests.get(
                 f"{SERVER_URL}/provider/session/{session_id}",
@@ -166,17 +197,23 @@ def idle_monitor(container_proc, session_id):
             if res.ok:
                 status = res.json()["status"]
                 if status == "LOCKED":
-                    # Session is being used, don't idle timeout
+                    session_locked = True
+                    # Check for actual container activity
+                    if check_container_activity():
+                        print("[agent] container activity detected")
                     time.sleep(30)
                     continue
         except Exception:
             pass
 
-        # Check idle timeout
-        if time.time() - LAST_ACTIVITY > IDLE_TIMEOUT:
-            print("[agent] idle timeout reached, stopping container")
-            container_proc.terminate()
-            break
+        # If session is READY (not locked), check idle timeout
+        if not session_locked:
+            idle_time = time.time() - LAST_CONTAINER_ACTIVITY["time"]
+            if idle_time > IDLE_TIMEOUT:
+                print(f"[agent] idle timeout reached ({idle_time:.0f}s), stopping container")
+                container_proc.terminate()
+                break
+        
         time.sleep(30)
 
 def detect_hardware():
