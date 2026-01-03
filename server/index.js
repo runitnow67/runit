@@ -116,12 +116,31 @@ app.get("/access/:accessToken", (req, res) => {
     return res.status(404).send("Session not found");
   }
 
+  // 🔒 LOCK SESSION - prevent multiple users from accessing same session
+  if (session.status !== "READY") {
+    return res.status(409).send("Session already in use");
+  }
+
+  session.status = "LOCKED";
+  session.lockedAt = Date.now();
+
+  console.log("[server] session locked:", sessionId);
+
   const redirectUrl =
     `${session.publicUrl}/lab?token=${session.jupyterToken}`;
 
   res.redirect(302, redirectUrl);
 });
 
+
+// Get session status (used by provider to check if in use)
+app.get("/provider/session/:sessionId", (req, res) => {
+  const session = sessions[req.params.sessionId];
+  if (!session) {
+    return res.status(404).json({ error: "not found" });
+  }
+  res.json({ status: session.status });
+});
 
 // Provider heartbeat
 app.post("/provider/heartbeat", (req, res) => {
@@ -150,6 +169,14 @@ setInterval(() => {
   for (const [id, session] of Object.entries(sessions)) {
     if (now - session.lastSeen > SESSION_TTL) {
       console.log("[server] removing stale session:", id);
+
+      // Remove associated access tokens to keep frontend/backend consistent
+      for (const [token, sId] of Object.entries(accessTokens)) {
+        if (sId === id) {
+          delete accessTokens[token];
+        }
+      }
+
       delete sessions[id];
     }
   }
