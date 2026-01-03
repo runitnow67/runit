@@ -5,22 +5,21 @@
     <button onclick="start()">Start Session</button>
 
     <script>
-      async function start() {
-        const res = await fetch(
-          "https://runit-p5ah.onrender.com/renter/request",
-          { method: "POST" }
-        );
+async function start() {
+  const res = await fetch(
+    "https://runit-p5ah.onrender.com/renter/request",
+    { method: "POST" }
+  );
 
-        if (!res.ok) {
-          alert("No sessions available or server error");
-          return;
-        }
+  if (!res.ok) {
+    alert("No sessions available");
+    return;
+  }
 
-        const data = await res.json();
-
-        const url = `${data.publicUrl}/lab?token=${data.token}`;
-        window.open(url, "_blank");
-      }
-    </script>
+  const data = await res.json();
+  const url = `https://runit-p5ah.onrender.com/access/${data.accessToken}`;
+  window.open(url, "_blank");
+}
+</script>
   </body>
 </html>
