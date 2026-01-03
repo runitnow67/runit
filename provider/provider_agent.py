@@ -149,15 +149,30 @@ def heartbeat_loop(session_id, payload):
         time.sleep(30)
 
 
-def idle_monitor(container_proc):
-    global LAST_ACTIVITY
-
+def idle_monitor(container_proc, session_id):
+    """Monitor idle timeout, but don't kill container if session is LOCKED."""
     while True:
         # Check if container is still running
         if container_proc.poll() is not None:
             print("[agent] container has stopped")
             break
-            
+
+        # Check if session is locked (in use by a renter)
+        try:
+            res = requests.get(
+                f"{SERVER_URL}/provider/session/{session_id}",
+                timeout=5
+            )
+            if res.ok:
+                status = res.json()["status"]
+                if status == "LOCKED":
+                    # Session is being used, don't idle timeout
+                    time.sleep(30)
+                    continue
+        except Exception:
+            pass
+
+        # Check idle timeout
         if time.time() - LAST_ACTIVITY > IDLE_TIMEOUT:
             print("[agent] idle timeout reached, stopping container")
             container_proc.terminate()
@@ -275,10 +290,10 @@ def main():
         daemon=True
     ).start()
 
-    # 💤 idle monitor
+    # 💤 idle monitor (session-aware - won't kill if LOCKED)
     threading.Thread(
         target=idle_monitor,
-        args=(docker_proc,),
+        args=(docker_proc, SESSION_ID),
         daemon=True
     ).start()
 
