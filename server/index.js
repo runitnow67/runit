@@ -123,6 +123,7 @@ app.get("/access/:accessToken", (req, res) => {
 
   session.status = "LOCKED";
   session.lockedAt = Date.now();
+  session.renterLastSeen = Date.now();
 
   console.log("[server] session locked:", sessionId);
 
@@ -132,6 +133,31 @@ app.get("/access/:accessToken", (req, res) => {
   res.redirect(302, redirectUrl);
 });
 
+// Renter heartbeat - proves renter still connected
+app.post("/renter/heartbeat/:accessToken", (req, res) => {
+  const sessionId = accessTokens[req.params.accessToken];
+  
+  if (!sessionId || !sessions[sessionId]) {
+    return res.status(404).json({ error: "session not found" });
+  }
+
+  sessions[sessionId].renterLastSeen = Date.now();
+  res.json({ ok: true });
+});
+
+// Renter release - unlock session when user disconnects
+app.post("/renter/release/:accessToken", (req, res) => {
+  const sessionId = accessTokens[req.params.accessToken];
+  
+  if (sessionId && sessions[sessionId]) {
+    sessions[sessionId].status = "READY";
+    delete sessions[sessionId].lockedAt;
+    delete sessions[sessionId].renterLastSeen;
+    console.log("[server] session unlocked (released by renter):", sessionId);
+  }
+  
+  res.json({ ok: true });
+});
 
 // Get session status (used by provider to check if in use)
 app.get("/provider/session/:sessionId", (req, res) => {
@@ -162,11 +188,24 @@ app.post("/provider/heartbeat", (req, res) => {
 
 // Cleanup stale sessions
 const SESSION_TTL = 2 * 60 * 1000;
+const RENTER_HEARTBEAT_TIMEOUT = 60 * 1000; // 1 minute
 
 setInterval(() => {
   const now = Date.now();
 
   for (const [id, session] of Object.entries(sessions)) {
+    // Auto-unlock LOCKED sessions with no renter heartbeat
+    if (session.status === "LOCKED" && session.renterLastSeen) {
+      const noRenterHeartbeat = now - session.renterLastSeen > RENTER_HEARTBEAT_TIMEOUT;
+      if (noRenterHeartbeat) {
+        session.status = "READY";
+        delete session.lockedAt;
+        delete session.renterLastSeen;
+        console.log("[server] auto-unlocked session (no renter heartbeat):", id);
+      }
+    }
+
+    // Remove sessions with no provider heartbeat
     if (now - session.lastSeen > SESSION_TTL) {
       console.log("[server] removing stale session:", id);
 
