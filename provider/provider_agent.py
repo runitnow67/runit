@@ -117,22 +117,35 @@ def main():
         "token": token
     }
 
-    resp = requests.post(f"{SERVER_URL}/provider/session", json=payload)
+    # 🔁 retry registration until success
+    while True:
+        try:
+            resp = requests.post(
+                f"{SERVER_URL}/provider/session",
+                json=payload,
+                timeout=5
+            )
+            resp.raise_for_status()
+            break
+        except Exception as e:
+            print("[agent] registration failed, retrying in 5s...", e)
+            time.sleep(5)
 
-    if not resp.ok:
-        print("[agent] session registration FAILED")
-        print(resp.text)
-        return
+    data = resp.json()
+    SESSION_ID = data["sessionId"]
+    ACCESS_TOKEN = data["accessToken"]
 
-    session_id = resp.json()["sessionId"]
-    print("[agent] session registered:", session_id)
+    print("[agent] session registered:", SESSION_ID)
+    print("[agent] access token issued (stored server-side)")
 
+    # ❤️ heartbeat
     threading.Thread(
         target=heartbeat_loop,
-        args=(session_id,),
+        args=(SESSION_ID,),
         daemon=True
     ).start()
 
+    # 💤 idle monitor
     threading.Thread(
         target=idle_monitor,
         args=(docker_proc,),
