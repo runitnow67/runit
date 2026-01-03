@@ -63,6 +63,25 @@ app.post("/provider/session", (req, res) => {
     res.status(500).json({ error: "internal error" });
   }
 });
+// Get all available sessions
+app.get("/renter/sessions", (req, res) => {
+  const availableSessions = Object.entries(sessions)
+    .filter(([_, s]) => s.status === "READY")
+    .map(([sessionId, s]) => {
+      const accessToken = Object.keys(accessTokens).find(
+        t => accessTokens[t] === sessionId
+      );
+      return {
+        sessionId,
+        accessToken,
+        hardware: s.hardware,
+        pricing: s.pricing
+      };
+    });
+
+  res.json(availableSessions);
+});
+
 // Renter requests session
 app.post("/renter/request", (req, res) => {
   const session = Object.values(sessions).find(
