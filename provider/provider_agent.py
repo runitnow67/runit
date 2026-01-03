@@ -132,6 +132,11 @@ def idle_monitor(container_proc):
     global LAST_ACTIVITY
 
     while True:
+        # Check if container is still running
+        if container_proc.poll() is not None:
+            print("[agent] container has stopped")
+            break
+            
         if time.time() - LAST_ACTIVITY > IDLE_TIMEOUT:
             print("[agent] idle timeout reached, stopping container")
             container_proc.terminate()
