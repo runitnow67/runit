@@ -62,8 +62,7 @@ def start_docker_jupyter():
         "--memory", "4g",              # Max 4GB RAM
         "--cpus", "2.0",               # Max 2 CPU cores
         "--pids-limit", "100",         # Limit number of processes
-        # 🔒 Security: Network limits
-        "--network-alias", "jupyter-isolated",
+        # 🔒 Security: Network (use default bridge; no custom alias required)
         # 🔒 Security: No privileged mode
         "--security-opt", "no-new-privileges:true",
         # 🔒 Security: Read-only root filesystem (workspace is writable)
