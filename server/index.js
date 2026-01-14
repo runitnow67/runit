@@ -220,7 +220,6 @@ setInterval(() => {
     }
   }
 }, 30 * 1000);
-
 app.listen(PORT, () => {
   console.log(`RUNIT server listening on port ${PORT}`);
 });
