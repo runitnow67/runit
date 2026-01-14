@@ -235,8 +235,14 @@ app.get("/access/:accessToken", (req, res) => {
   res.redirect(302, redirectUrl);
 });
 
-// Renter heartbeat - proves renter still connected
-app.post("/renter/heartbeat/:accessToken", heartbeatLimiter, (req, res) => {
+// Renter heartbeat - light rate limiting (less critical now with 2hr timeout)
+const renterHeartbeatLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 200, // Very permissive
+  skipSuccessfulRequests: true
+});
+
+app.post("/renter/heartbeat/:accessToken", renterHeartbeatLimiter, (req, res) => {
   const sessionId = accessTokens[req.params.accessToken];
   
   if (!sessionId || !sessions[sessionId]) {
@@ -281,8 +287,8 @@ app.get("/provider/session/:sessionId", (req, res) => {
   res.json({ status: session.status });
 });
 
-// Provider heartbeat
-app.post("/provider/heartbeat", heartbeatLimiter, (req, res) => {
+// Provider heartbeat - NO rate limiting (critical infrastructure)
+app.post("/provider/heartbeat", (req, res) => {
   const { sessionId } = req.body || {};
 
   if (!sessionId) {
