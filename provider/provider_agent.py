@@ -5,6 +5,7 @@ import re
 import uuid
 import requests
 import threading
+import os
 
 JUPYTER_PORT = 8888
 SERVER_URL = "https://runit-p5ah.onrender.com"
@@ -57,6 +58,19 @@ def start_docker_jupyter():
         "--rm",
         "-p", "8888:8888",
         "--name", "runit-session",
+        # 🔒 Security: Resource limits
+        "--memory", "4g",              # Max 4GB RAM
+        "--cpus", "2.0",               # Max 2 CPU cores
+        "--pids-limit", "100",         # Limit number of processes
+        # 🔒 Security: Network limits
+        "--network-alias", "jupyter-isolated",
+        # 🔒 Security: No privileged mode
+        "--security-opt", "no-new-privileges:true",
+        # 🔒 Security: Read-only root filesystem (workspace is writable)
+        "--read-only",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=100m",
+        "--tmpfs", "/home/jupyteruser/.local:rw,noexec,nosuid,size=200m",
+        "-v", f"{os.getcwd()}/workspace:/workspace:rw",
         "runit-jupyter"
     ]
 
@@ -269,6 +283,11 @@ def estimate_price(hardware):
 
 def main():
     global LAST_ACTIVITY
+
+    # 🔒 Ensure workspace directory exists
+    workspace_dir = os.path.join(os.getcwd(), "workspace")
+    os.makedirs(workspace_dir, exist_ok=True)
+    print(f"[agent] workspace directory: {workspace_dir}")
 
     try:
         ensure_docker_image()
