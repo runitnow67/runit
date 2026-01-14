@@ -53,6 +53,20 @@ def ensure_docker_image():
 def start_docker_jupyter():
     print("[agent] starting dockerized jupyter...")
 
+    # 🔒 Ensure workspace exists with absolute path
+    workspace_path = os.path.abspath(os.path.join(os.getcwd(), "workspace"))
+    os.makedirs(workspace_path, exist_ok=True)
+    
+    # Create welcome file if workspace is empty
+    welcome_file = os.path.join(workspace_path, "README.md")
+    if not os.path.exists(welcome_file):
+        with open(welcome_file, "w") as f:
+            f.write("# Welcome to RUNIT\n\n")
+            f.write("This is your persistent workspace.\n\n")
+            f.write("Files saved here will persist across container restarts.\n")
+    
+    print(f"[agent] workspace ready: {workspace_path}")
+
     cmd = [
         "docker", "run",
         "--rm",
@@ -69,7 +83,7 @@ def start_docker_jupyter():
         "--read-only",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=100m",
         "--tmpfs", "/home/jupyteruser/.local:rw,noexec,nosuid,size=200m",
-        "-v", f"{os.getcwd()}/workspace:/workspace:rw",
+        "-v", f"{workspace_path}:/workspace:rw",
         "runit-jupyter"
     ]
 
