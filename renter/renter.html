@@ -98,7 +98,22 @@
         startHeartbeat(accessToken);
         
         const url = `https://runit-p5ah.onrender.com/access/${accessToken}`;
-        window.open(url, "_blank");
+        
+        // Open in NEW WINDOW (not tab) so this page stays alive and sends heartbeats
+        const jupyterWindow = window.open(url, "_blank", "width=1400,height=900");
+        
+        // Show status message
+        const statusDiv = document.createElement('div');
+        statusDiv.style.cssText = 'position:fixed;top:20px;right:20px;background:#4CAF50;color:white;padding:15px 20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:9999;';
+        statusDiv.innerHTML = `
+          <strong>✅ Connected!</strong><br>
+          <small>Keep this page open for heartbeats</small><br>
+          <button onclick="this.parentElement.remove()" style="margin-top:8px;background:white;color:#4CAF50;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">Dismiss</button>
+        `;
+        document.body.appendChild(statusDiv);
+        
+        // Auto-remove after 10 seconds
+        setTimeout(() => statusDiv.remove(), 10000);
       }
 
       function startHeartbeat(accessToken) {
@@ -107,17 +122,30 @@
           clearInterval(heartbeatInterval);
         }
 
+        console.log("[renter] Starting heartbeat for session");
+
         // Send heartbeat every 30 seconds
         heartbeatInterval = setInterval(async () => {
           try {
-            await fetch(
+            const res = await fetch(
               `https://runit-p5ah.onrender.com/renter/heartbeat/${accessToken}`,
               { method: "POST" }
             );
+            if (res.ok) {
+              console.log("[renter] ❤️ Heartbeat sent successfully");
+            } else {
+              console.error("[renter] Heartbeat failed:", res.status, await res.text());
+            }
           } catch (err) {
-            console.error("Heartbeat failed:", err);
+            console.error("[renter] Heartbeat error:", err);
           }
         }, 30000);
+        
+        // Send first heartbeat immediately
+        fetch(
+          `https://runit-p5ah.onrender.com/renter/heartbeat/${accessToken}`,
+          { method: "POST" }
+        ).then(() => console.log("[renter] ❤️ Initial heartbeat sent"));
       }
 
       async function releaseSession(accessToken) {
