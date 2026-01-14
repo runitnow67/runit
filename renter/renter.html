@@ -94,26 +94,43 @@
       async function connectSession(accessToken) {
         currentAccessToken = accessToken;
         
-        // Start heartbeat to prove we're still connected
-        startHeartbeat(accessToken);
-        
         const url = `https://runit-p5ah.onrender.com/access/${accessToken}`;
         
-        // Open in NEW WINDOW (not tab) so this page stays alive and sends heartbeats
-        const jupyterWindow = window.open(url, "_blank", "width=1400,height=900");
+        // Open Jupyter in new tab/window
+        const jupyterWindow = window.open(url, "_blank");
         
-        // Show status message
+        // Show status - heartbeat is now optional (only for tracking, not for keeping session alive)
         const statusDiv = document.createElement('div');
         statusDiv.style.cssText = 'position:fixed;top:20px;right:20px;background:#4CAF50;color:white;padding:15px 20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:9999;';
         statusDiv.innerHTML = `
           <strong>✅ Connected!</strong><br>
-          <small>Keep this page open for heartbeats</small><br>
-          <button onclick="this.parentElement.remove()" style="margin-top:8px;background:white;color:#4CAF50;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">Dismiss</button>
+          <small>Session will stay active until you close Jupyter</small><br>
+          <button onclick="this.parentElement.remove()" style="margin-top:8px;background:white;color:#4CAF50;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">OK</button>
         `;
         document.body.appendChild(statusDiv);
         
-        // Auto-remove after 10 seconds
-        setTimeout(() => statusDiv.remove(), 10000);
+        // Auto-remove after 5 seconds
+        setTimeout(() => statusDiv.remove(), 5000);
+        
+        // Optional: Send periodic heartbeat for tracking (not required for session lock)
+        // This helps server know session is being used, but won't unlock if missed
+        startHeartbeat(accessToken);
+        
+        // Monitor if Jupyter window is closed, then release
+        if (jupyterWindow) {
+          const checkClosed = setInterval(() => {
+            if (jupyterWindow.closed) {
+              console.log("[renter] Jupyter window closed, releasing session");
+              clearInterval(checkClosed);
+              releaseSession(accessToken);
+              if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+              }
+              currentAccessToken = null;
+            }
+          }, 2000); // Check every 2 seconds
+        }
       }
 
       function startHeartbeat(accessToken) {

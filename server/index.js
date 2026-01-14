@@ -301,26 +301,30 @@ app.post("/provider/heartbeat", heartbeatLimiter, (req, res) => {
 
 // Cleanup stale sessions
 const SESSION_TTL = 2 * 60 * 1000;
-const RENTER_HEARTBEAT_TIMEOUT = 60 * 1000; // 1 minute
+const RENTER_HEARTBEAT_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours (only for abandoned sessions)
 
 setInterval(() => {
   const now = Date.now();
 
   for (const [id, session] of Object.entries(sessions)) {
-    // Auto-unlock LOCKED sessions with no renter heartbeat
+    // Auto-unlock LOCKED sessions only if:
+    // 1. No renter heartbeat for 2 HOURS (abandoned session)
+    // 2. Provider is still alive (has recent heartbeat)
     if (session.status === "LOCKED" && session.renterLastSeen) {
-      const noRenterHeartbeat = now - session.renterLastSeen > RENTER_HEARTBEAT_TIMEOUT;
-      if (noRenterHeartbeat) {
+      const renterAbandoned = now - session.renterLastSeen > RENTER_HEARTBEAT_TIMEOUT;
+      const providerAlive = now - session.lastSeen < SESSION_TTL;
+      
+      if (renterAbandoned && providerAlive) {
         session.status = "READY";
         delete session.lockedAt;
         delete session.renterLastSeen;
         delete session.renterIp;
-        logSecurityEvent("SESSION_AUTO_UNLOCKED", { sessionId: id, reason: "no_renter_heartbeat" });
-        console.log("[server] auto-unlocked session (no renter heartbeat):", id);
+        logSecurityEvent("SESSION_AUTO_UNLOCKED", { sessionId: id, reason: "abandoned_2hr_timeout" });
+        console.log("[server] auto-unlocked abandoned session (2hr timeout):", id);
       }
     }
 
-    // Remove sessions with no provider heartbeat
+    // Remove sessions with no provider heartbeat (provider offline)
     if (now - session.lastSeen > SESSION_TTL) {
       logSecurityEvent("SESSION_REMOVED", { sessionId: id, reason: "stale_provider" });
       console.log("[server] removing stale session:", id);
