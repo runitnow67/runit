@@ -35,7 +35,7 @@ const generalLimiter = rateLimit({
 
 const sessionLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 10, // Limit session creation to 10 per 5 minutes
+  max: 100, // Relaxed for development (increase from 10 to 100)
   message: "Too many session requests, please try again later."
 });
 
