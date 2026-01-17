@@ -145,14 +145,37 @@ def start_cloudflared():
 
 
 def remove_workspace_volume(volume_name):
-    """Delete the per-session docker volume (best-effort)."""
+    """Delete the per-session docker volume."""
     if not volume_name:
         return
-    subprocess.run(
-        ["docker", "volume", "rm", "-f", volume_name],
-        capture_output=True,
-        text=True
-    )
+    
+    try:
+        # Wait a moment for container to fully release the volume
+        time.sleep(1)
+        
+        # Force remove the volume (even if still in use)
+        result = subprocess.run(
+            ["docker", "volume", "rm", "-f", volume_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            print(f"[agent] workspace volume removed: {volume_name}")
+        else:
+            print(f"[agent] warning: failed to remove volume {volume_name}: {result.stderr.strip()}")
+            # Try again without -f flag
+            result2 = subprocess.run(
+                ["docker", "volume", "rm", volume_name],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result2.returncode == 0:
+                print(f"[agent] workspace volume removed (second attempt): {volume_name}")
+    except Exception as e:
+        print(f"[agent] error removing volume {volume_name}: {e}")
 
 
 def heartbeat_loop(session_id, payload):
