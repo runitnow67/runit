@@ -244,6 +244,7 @@ def idle_monitor(container_proc, session_id):
             idle_time = time.time() - LAST_CONTAINER_ACTIVITY["time"]
             if idle_time > IDLE_TIMEOUT:
                 print(f"[agent] idle timeout reached ({idle_time:.0f}s), stopping container")
+                SHUTDOWN = True  # ✅ Stop heartbeat before terminating
                 container_proc.terminate()
                 break
         
