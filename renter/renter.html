@@ -34,6 +34,12 @@
   </head>
   <body>
     <h2>RUNIT – Available Jupyter Sessions</h2>
+    <div style="margin-bottom: 12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <a href="http://localhost:10000/auth/github" target="_blank" style="padding:8px 12px;background:#24292e;color:white;text-decoration:none;border-radius:6px;">Login with GitHub</a>
+      <input id="tokenInput" type="text" placeholder="Paste JWT token here" style="flex:1; min-width:240px; padding:8px;" />
+      <button onclick="saveToken()">Save Token</button>
+      <small id="tokenStatus" style="color:#555; display:block; width:100%;">Token: not set</small>
+    </div>
     <div id="sessions" class="sessions-container">
       <p class="loading">Loading sessions...</p>
     </div>
@@ -42,10 +48,36 @@
       let currentAccessToken = null;
       let heartbeatInterval = null;
 
+      function getAuthHeaders() {
+        const token = localStorage.getItem('renterToken');
+        if (!token) return {};
+        return { 'Authorization': `Bearer ${token}` };
+      }
+
+      function saveToken() {
+        const val = document.getElementById('tokenInput').value.trim();
+        if (val) {
+          localStorage.setItem('renterToken', val);
+          document.getElementById('tokenStatus').textContent = 'Token: saved';
+        } else {
+          localStorage.removeItem('renterToken');
+          document.getElementById('tokenStatus').textContent = 'Token: not set';
+        }
+      }
+
+      function loadSavedToken() {
+        const token = localStorage.getItem('renterToken');
+        if (token) {
+          document.getElementById('tokenInput').value = token;
+          document.getElementById('tokenStatus').textContent = 'Token: saved';
+        }
+      }
+
       async function loadSessions() {
         try {
           const res = await fetch(
-            "https://runit-p5ah.onrender.com/renter/sessions"
+            "https://runit-p5ah.onrender.com/renter/sessions",
+            { headers: getAuthHeaders() }
           );
 
           if (!res.ok) {
@@ -146,7 +178,7 @@
           try {
             const res = await fetch(
               `https://runit-p5ah.onrender.com/renter/heartbeat/${accessToken}`,
-              { method: "POST" }
+              { method: "POST", headers: getAuthHeaders() }
             );
             if (res.ok) {
               console.log("[renter] ❤️ Heartbeat sent successfully");
@@ -161,7 +193,7 @@
         // Send first heartbeat immediately
         fetch(
           `https://runit-p5ah.onrender.com/renter/heartbeat/${accessToken}`,
-          { method: "POST" }
+          { method: "POST", headers: getAuthHeaders() }
         ).then(() => console.log("[renter] ❤️ Initial heartbeat sent"));
       }
 
@@ -171,7 +203,7 @@
         try {
           await fetch(
             `https://runit-p5ah.onrender.com/renter/release/${accessToken}`,
-            { method: "POST", keepalive: true }
+            { method: "POST", keepalive: true, headers: getAuthHeaders() }
           );
         } catch (err) {
           console.error("Release failed:", err);
@@ -189,6 +221,7 @@
       });
 
       // Load sessions when page loads
+      loadSavedToken();
       loadSessions();
 
       // Refresh sessions every 5 seconds

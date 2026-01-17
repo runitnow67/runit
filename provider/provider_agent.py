@@ -11,6 +11,9 @@ JUPYTER_PORT = 8888
 SERVER_URL = "https://runit-p5ah.onrender.com"
 PROVIDER_ID = str(uuid.uuid4())
 
+# Authentication token (get from: http://localhost:10000/auth/github)
+AUTH_TOKEN = os.getenv("RUNIT_AUTH_TOKEN", "")
+
 # Track actual container activity
 LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
 IDLE_TIMEOUT = 2 * 60  # 2 minutes
@@ -404,12 +407,22 @@ def main():
     }
 }
 
+    # Prepare headers with authentication if token is available
+    headers = {"Content-Type": "application/json"}
+    if AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+        print("[agent] using authentication token")
+    else:
+        print("[agent] WARNING: No auth token - server may require authentication!")
+        print("[agent] Set RUNIT_AUTH_TOKEN env var or login at:", f"{SERVER_URL}/auth/github")
+
     # 🔁 retry registration until success
     while True:
         try:
             resp = requests.post(
                 f"{SERVER_URL}/provider/session",
                 json=payload,
+                headers=headers,
                 timeout=5
             )
             resp.raise_for_status()

@@ -3,13 +3,20 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node db/migrate.js && node index_v2.js",
+    "migrate": "node db/migrate.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
-    "http-proxy-middleware": "^2.0.6"
+    "http-proxy-middleware": "^2.0.6",
+    "pg": "^8.11.3",
+    "passport": "^0.7.0",
+    "passport-github2": "^0.1.12",
+    "express-session": "^1.17.3",
+    "jsonwebtoken": "^9.0.2",
+    "dotenv": "^16.3.1"
   }
 }
