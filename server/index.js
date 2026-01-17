@@ -2,7 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const providers = {}; // providerId -> { createdAt }
@@ -24,29 +23,7 @@ const PORT = process.env.PORT || 10000;
 
 const sessions = {};
 
-// 🛡️ Rate limiting for different endpoints
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: "Too many requests from this IP, please try again later.",
-  standardHeaders: true,
-  legacyHeaders: false
-});
-
-const sessionLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 100, // Relaxed for development (increase from 10 to 100)
-  message: "Too many session requests, please try again later."
-});
-
-const heartbeatLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // Allow frequent heartbeats
-  skipSuccessfulRequests: true
-});
-
-// Apply general rate limiting to all requests
-app.use(generalLimiter);
+// Development mode: rate limiting removed
 
 // Health check
 app.get("/", (req, res) => {
@@ -92,7 +69,7 @@ function trackBandwidth(sessionId, bytesIn, bytesOut) {
 }
 
 // Provider registers session
-app.post("/provider/session", sessionLimiter, (req, res) => {
+app.post("/provider/session", (req, res) => {
   try {
     const { providerId, publicUrl, token, hardware, pricing } = req.body || {};
 
@@ -235,14 +212,8 @@ app.get("/access/:accessToken", (req, res) => {
   res.redirect(302, redirectUrl);
 });
 
-// Renter heartbeat - light rate limiting (less critical now with 2hr timeout)
-const renterHeartbeatLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 200, // Very permissive
-  skipSuccessfulRequests: true
-});
-
-app.post("/renter/heartbeat/:accessToken", renterHeartbeatLimiter, (req, res) => {
+// Renter heartbeat
+app.post("/renter/heartbeat/:accessToken", (req, res) => {
   const sessionId = accessTokens[req.params.accessToken];
   
   if (!sessionId || !sessions[sessionId]) {
