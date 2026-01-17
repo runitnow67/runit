@@ -14,6 +14,7 @@ PROVIDER_ID = str(uuid.uuid4())
 # Track actual container activity
 LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
 IDLE_TIMEOUT = 10 * 60  # 10 minutes
+SHUTDOWN = False  # Flag to stop heartbeat when container stops
 
 def ensure_docker_image():
     image_name = "runit-jupyter"
@@ -145,7 +146,9 @@ def start_cloudflared():
 
 def heartbeat_loop(session_id, payload):
     """Send heartbeats to server. If 404, server restarted - re-register needed."""
-    while True:
+    global SHUTDOWN
+    
+    while not SHUTDOWN:  # ✅ Exit loop when shutdown flag is set
         try:
             resp = requests.post(
                 f"{SERVER_URL}/provider/heartbeat",
@@ -175,6 +178,8 @@ def heartbeat_loop(session_id, payload):
             print("[agent] heartbeat error:", e)
         
         time.sleep(30)
+    
+    print("[agent] heartbeat loop stopped")
 
 
 def check_container_activity():
@@ -206,12 +211,13 @@ def check_container_activity():
 
 def idle_monitor(container_proc, session_id):
     """Monitor idle timeout with actual container activity detection."""
-    global LAST_CONTAINER_ACTIVITY
+    global LAST_CONTAINER_ACTIVITY, SHUTDOWN
     
     while True:
         # Check if container is still running
         if container_proc.poll() is not None:
-            print("[agent] container has stopped")
+            print("[agent] container has stopped, stopping heartbeat")
+            SHUTDOWN = True  # ✅ Signal heartbeat_loop to stop
             break
 
         # Check if session is locked (in use by a renter)
