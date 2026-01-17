@@ -142,6 +142,11 @@ app.get("/", (req, res) => {
   res.send("RUNIT control plane running ✅");
 });
 
+// Renter UI
+app.get("/renter", (req, res) => {
+  res.sendFile(__dirname + "/public/renter.html");
+});
+
 // Auth routes
 app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
 
