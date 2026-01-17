@@ -275,8 +275,11 @@ app.post("/provider/session", requireAuth, async (req, res) => {
 // Get all available sessions (auth required)
 app.get("/renter/sessions", requireAuth, async (req, res) => {
   try {
-    const { rows } = await db.query(
-      `SELECT s.session_id, s.access_token, p.hardware, p.pricing, u.name as provider_name
+    const userId = req.user.id;
+
+    // READY sessions for all users
+    const { rows: readySessions } = await db.query(
+      `SELECT s.session_id, s.access_token, p.hardware, p.pricing, u.name as provider_name, 'READY' as session_status
        FROM sessions s
        JOIN providers p ON s.provider_id = p.id
        JOIN users u ON p.user_id = u.id
@@ -284,13 +287,38 @@ app.get("/renter/sessions", requireAuth, async (req, res) => {
        ORDER BY s.created_at DESC`
     );
 
-    res.json(rows.map(r => ({
-      sessionId: r.session_id,
-      accessToken: r.access_token,
-      hardware: r.hardware,
-      pricing: r.pricing,
-      providerName: r.provider_name
-    })));
+    // LOCKED_ABANDONED sessions for current user (with reconnect option)
+    const { rows: abandonedSessions } = await db.query(
+      `SELECT s.session_id, s.access_token, p.hardware, p.pricing, u.name as provider_name, 'LOCKED_ABANDONED' as session_status
+       FROM sessions s
+       JOIN providers p ON s.provider_id = p.id
+       JOIN users u ON p.user_id = u.id
+       WHERE s.status = 'LOCKED_ABANDONED' AND s.locked_by_user_id = $1
+       ORDER BY s.abandoned_at DESC`,
+      [userId]
+    );
+
+    const sessions = [
+      ...readySessions.map(r => ({
+        sessionId: r.session_id,
+        accessToken: r.access_token,
+        hardware: r.hardware,
+        pricing: r.pricing,
+        providerName: r.provider_name,
+        sessionStatus: r.session_status
+      })),
+      ...abandonedSessions.map(r => ({
+        sessionId: r.session_id,
+        accessToken: r.access_token,
+        hardware: r.hardware,
+        pricing: r.pricing,
+        providerName: r.provider_name,
+        sessionStatus: r.session_status,
+        isAbandoned: true
+      }))
+    ];
+
+    res.json(sessions);
   } catch (err) {
     console.error("[server] renter/sessions error:", err);
     res.status(500).json({ error: "internal error" });
@@ -298,9 +326,10 @@ app.get("/renter/sessions", requireAuth, async (req, res) => {
 });
 
 // Access session (lock it)
-app.get("/access/:accessToken", async (req, res) => {
+app.get("/access/:accessToken", requireAuth, async (req, res) => {
   try {
     const { accessToken } = req.params;
+    const userId = req.user.id;
 
     // Get session
     const { rows } = await db.query(
@@ -314,40 +343,54 @@ app.get("/access/:accessToken", async (req, res) => {
     if (rows.length === 0) {
       logSecurityEvent("INVALID_ACCESS_ATTEMPT", { 
         ip: req.ip, 
-        accessToken: accessToken.substring(0, 8) + "..." 
+        accessToken: accessToken.substring(0, 8) + "...",
+        userId
       });
       return res.status(403).send("Invalid or expired token");
     }
 
     const session = rows[0];
 
-    if (session.status !== "READY") {
+    // Allow LOCKED_ABANDONED sessions for the owner to reconnect
+    if (session.status === "LOCKED" && session.locked_by_user_id !== userId) {
       logSecurityEvent("SESSION_ALREADY_LOCKED", { 
+        sessionId: session.session_id, 
+        ip: req.ip, 
+        status: session.status,
+        lockedByUser: session.locked_by_user_id,
+        attemptUser: userId
+      });
+      return res.status(409).send("Session already in use by another user");
+    }
+
+    if (session.status !== "READY" && session.status !== "LOCKED_ABANDONED") {
+      logSecurityEvent("SESSION_INVALID_STATE", { 
         sessionId: session.session_id, 
         ip: req.ip, 
         status: session.status 
       });
-      return res.status(409).send("Session already in use");
+      return res.status(409).send("Session not available");
     }
 
-    // Lock session
+    // Lock session or re-lock abandoned session
     await db.query(
       `UPDATE sessions 
-       SET status = 'LOCKED', locked_at = NOW(), renter_last_seen = NOW(), renter_ip = $1::inet,
-           renter_id = $2
+       SET status = 'LOCKED', locked_by_user_id = $1, locked_at = NOW(), 
+           abandoned_at = NULL, last_heartbeat = NOW(),
+           renter_last_seen = NOW(), renter_ip = $2::inet, renter_id = $1
        WHERE access_token = $3`,
-      [req.ip, req.user?.id || null, accessToken]
+      [userId, req.ip, accessToken]
     );
 
     // Log lock event
     await db.query(
       `INSERT INTO session_history (session_id, event_type, metadata)
        VALUES ($1, 'locked', $2)`,
-      [session.id, JSON.stringify({ ip: req.ip, userId: req.user?.id })]
+      [session.id, JSON.stringify({ ip: req.ip, userId, type: session.status === 'LOCKED_ABANDONED' ? 'reconnect' : 'lock' })]
     );
 
-    logSecurityEvent("SESSION_LOCKED", { sessionId: session.session_id, ip: req.ip });
-    console.log("[server] session locked:", session.session_id);
+    logSecurityEvent("SESSION_LOCKED", { sessionId: session.session_id, userId, ip: req.ip });
+    console.log("[server] session locked:", session.session_id, "user:", userId);
 
     const redirectUrl = `${session.public_url}/lab?token=${session.jupyter_token}`;
     res.redirect(302, redirectUrl);
@@ -362,6 +405,7 @@ app.get("/access/:accessToken", async (req, res) => {
 app.post("/renter/heartbeat/:accessToken", requireAuth, async (req, res) => {
   try {
     const { accessToken } = req.params;
+    const userId = req.user.id;
     
     const { rows } = await db.query(
       'SELECT * FROM sessions WHERE access_token = $1',
@@ -374,6 +418,16 @@ app.post("/renter/heartbeat/:accessToken", requireAuth, async (req, res) => {
 
     const session = rows[0];
 
+    // Verify user owns this session
+    if (session.locked_by_user_id !== userId) {
+      logSecurityEvent("HEARTBEAT_UNAUTHORIZED", { 
+        sessionId: session.session_id, 
+        sessionOwner: session.locked_by_user_id,
+        attemptUser: userId
+      });
+      return res.status(403).json({ error: "not authorized" });
+    }
+
     if (session.renter_ip && session.renter_ip !== req.ip) {
       logSecurityEvent("SESSION_HIJACK_ATTEMPT", { 
         sessionId: session.session_id, 
@@ -383,8 +437,9 @@ app.post("/renter/heartbeat/:accessToken", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "IP mismatch - access denied" });
     }
 
+    // Update last heartbeat and last seen
     await db.query(
-      'UPDATE sessions SET renter_last_seen = NOW() WHERE access_token = $1',
+      'UPDATE sessions SET last_heartbeat = NOW(), renter_last_seen = NOW() WHERE access_token = $1',
       [accessToken]
     );
 
@@ -399,22 +454,47 @@ app.post("/renter/heartbeat/:accessToken", requireAuth, async (req, res) => {
 app.post("/renter/release/:accessToken", requireAuth, async (req, res) => {
   try {
     const { accessToken } = req.params;
+    const userId = req.user.id;
     
     const { rows } = await db.query(
+      `SELECT * FROM sessions WHERE access_token = $1`,
+      [accessToken]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "session not found" });
+    }
+
+    const session = rows[0];
+
+    // Only session owner can release
+    if (session.locked_by_user_id !== userId) {
+      logSecurityEvent("RELEASE_UNAUTHORIZED", { 
+        sessionId: session.session_id,
+        sessionOwner: session.locked_by_user_id,
+        attemptUser: userId
+      });
+      return res.status(403).json({ error: "not authorized" });
+    }
+
+    // Unlock session
+    const { rows: updated } = await db.query(
       `UPDATE sessions 
-       SET status = 'READY', locked_at = NULL, renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL
+       SET status = 'READY', locked_by_user_id = NULL, locked_at = NULL, 
+           abandoned_at = NULL, last_heartbeat = NULL,
+           renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL
        WHERE access_token = $1
        RETURNING session_id, id`,
       [accessToken]
     );
 
-    if (rows.length > 0) {
+    if (updated.length > 0) {
       await db.query(
         `INSERT INTO session_history (session_id, event_type, metadata)
          VALUES ($1, 'unlocked', $2)`,
-        [rows[0].id, JSON.stringify({ reason: 'manual_release' })]
+        [updated[0].id, JSON.stringify({ reason: 'manual_release', userId })]
       );
-      console.log("[server] session unlocked (released by renter):", rows[0].session_id);
+      console.log("[server] session unlocked (released by renter):", updated[0].session_id);
     }
     
     res.json({ ok: true });
@@ -522,6 +602,65 @@ setInterval(async () => {
     console.error("[server] cleanup error:", err);
   }
 }, 30 * 1000);
+
+// Background job: Idle detection (2 min) and grace period cleanup (10 min)
+setInterval(async () => {
+  try {
+    const now = new Date();
+    const idle2MinAgo = new Date(now.getTime() - 2 * 60 * 1000);
+    const abandoned10MinAgo = new Date(now.getTime() - 10 * 60 * 1000);
+
+    // Auto-unlock LOCKED sessions with no heartbeat for 2 min
+    const { rows: idleSessions } = await db.query(
+      `SELECT id, session_id FROM sessions 
+       WHERE status = 'LOCKED' AND last_heartbeat IS NOT NULL 
+       AND last_heartbeat < $1`,
+      [idle2MinAgo]
+    );
+
+    for (const session of idleSessions) {
+      await db.query(
+        `UPDATE sessions 
+         SET status = 'LOCKED_ABANDONED', abandoned_at = NOW()
+         WHERE id = $1`,
+        [session.id]
+      );
+      await db.query(
+        `INSERT INTO session_history (session_id, event_type, metadata)
+         VALUES ($1, 'auto_abandoned', $2)`,
+        [session.id, JSON.stringify({ reason: 'no_heartbeat_2min' })]
+      );
+      console.log("[server] session auto-abandoned (idle 2 min):", session.session_id);
+    }
+
+    // Auto-unlock LOCKED_ABANDONED sessions after 10 min grace period
+    const { rows: expiredAbandoned } = await db.query(
+      `SELECT id, session_id FROM sessions 
+       WHERE status = 'LOCKED_ABANDONED' AND abandoned_at IS NOT NULL 
+       AND abandoned_at < $1`,
+      [abandoned10MinAgo]
+    );
+
+    for (const session of expiredAbandoned) {
+      await db.query(
+        `UPDATE sessions 
+         SET status = 'READY', locked_by_user_id = NULL, locked_at = NULL,
+             abandoned_at = NULL, last_heartbeat = NULL,
+             renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL
+         WHERE id = $1`,
+        [session.id]
+      );
+      await db.query(
+        `INSERT INTO session_history (session_id, event_type, metadata)
+         VALUES ($1, 'auto_released', $2)`,
+        [session.id, JSON.stringify({ reason: 'grace_period_expired' })]
+      );
+      console.log("[server] session auto-released (grace period expired):", session.session_id);
+    }
+  } catch (err) {
+    console.error("[server] session cleanup job error:", err);
+  }
+}, 30 * 1000); // Run every 30 seconds
 
 app.listen(PORT, () => {
   console.log(`RUNIT server listening on port ${PORT}`);
