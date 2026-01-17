@@ -283,6 +283,16 @@ def idle_monitor(container_proc, session_id, volume_name):
                 print(f"[agent] idle timeout reached ({idle_time:.0f}s), stopping container")
                 SHUTDOWN = True  # ✅ Stop heartbeat before terminating
                 container_proc.terminate()
+                
+                # Wait for container to fully exit before removing volume
+                try:
+                    container_proc.wait(timeout=10)
+                    print("[agent] container stopped cleanly")
+                except subprocess.TimeoutExpired:
+                    print("[agent] container didn't stop gracefully, force killing")
+                    container_proc.kill()
+                    container_proc.wait(timeout=5)
+                
                 break
         
         time.sleep(30)
@@ -436,6 +446,16 @@ def main():
         print("\n[agent] shutting down")
         docker_proc.terminate()
         cloudflared_proc.terminate()
+        
+        # Wait for container to fully exit
+        try:
+            docker_proc.wait(timeout=10)
+            print("[agent] container stopped cleanly")
+        except subprocess.TimeoutExpired:
+            print("[agent] force killing container")
+            docker_proc.kill()
+            docker_proc.wait(timeout=5)
+        
         remove_workspace_volume(volume_name)
 
 
