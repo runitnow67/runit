@@ -54,19 +54,17 @@ def ensure_docker_image():
 def start_docker_jupyter():
     print("[agent] starting dockerized jupyter...")
 
-    # 🔒 Ensure workspace exists with absolute path
-    workspace_path = os.path.abspath(os.path.join(os.getcwd(), "workspace"))
-    os.makedirs(workspace_path, exist_ok=True)
-    
-    # Create welcome file if workspace is empty
-    welcome_file = os.path.join(workspace_path, "README.md")
-    if not os.path.exists(welcome_file):
-        with open(welcome_file, "w") as f:
-            f.write("# Welcome to RUNIT\n\n")
-            f.write("This is your persistent workspace.\n\n")
-            f.write("Files saved here will persist across container restarts.\n")
-    
-    print(f"[agent] workspace ready: {workspace_path}")
+    # Ephemeral workspace: per-session docker volume, removed when container stops
+    volume_name = f"runit-workspace-{uuid.uuid4().hex[:8]}"
+    created = subprocess.run(
+        ["docker", "volume", "create", volume_name],
+        capture_output=True,
+        text=True
+    )
+    if created.returncode != 0:
+        raise RuntimeError(f"Failed to create workspace volume: {created.stderr.strip()}")
+
+    print(f"[agent] workspace volume ready: {volume_name}")
 
     cmd = [
         "docker", "run",
@@ -84,7 +82,7 @@ def start_docker_jupyter():
         "--read-only",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=100m",
         "--tmpfs", "/home/jupyteruser/.local:rw,noexec,nosuid,size=200m",
-        "-v", f"{workspace_path}:/workspace:rw",
+        "-v", f"{volume_name}:/workspace:rw",
         "runit-jupyter"
     ]
 
@@ -100,6 +98,7 @@ def start_docker_jupyter():
         print("[docker]", line.strip())
 
         if "Error response from daemon" in line:
+            remove_workspace_volume(volume_name)
             raise RuntimeError("Docker container failed to start")
 
         if "token=" in line and token is None:
@@ -110,9 +109,10 @@ def start_docker_jupyter():
                 break
 
     if not token:
+        remove_workspace_volume(volume_name)
         raise RuntimeError("Jupyter token not found; aborting")
 
-    return proc, token
+    return proc, token, volume_name
 
 
 def start_cloudflared():
@@ -142,6 +142,17 @@ def start_cloudflared():
             break
 
     return proc, public_url
+
+
+def remove_workspace_volume(volume_name):
+    """Delete the per-session docker volume (best-effort)."""
+    if not volume_name:
+        return
+    subprocess.run(
+        ["docker", "volume", "rm", "-f", volume_name],
+        capture_output=True,
+        text=True
+    )
 
 
 def heartbeat_loop(session_id, payload):
@@ -211,7 +222,7 @@ def check_container_activity():
     return False
 
 
-def idle_monitor(container_proc, session_id):
+def idle_monitor(container_proc, session_id, volume_name):
     """Monitor idle timeout with actual container activity detection."""
     global LAST_CONTAINER_ACTIVITY, SHUTDOWN, CURRENT_SESSION
     
@@ -252,6 +263,9 @@ def idle_monitor(container_proc, session_id):
                 break
         
         time.sleep(30)
+    
+    # Container stopped (idle timeout or crash) -> remove workspace volume
+    remove_workspace_volume(volume_name)
 
 def detect_hardware():
     gpu = "CPU"
@@ -330,7 +344,7 @@ def main():
 
     try:
         ensure_docker_image()
-        docker_proc, token = start_docker_jupyter()
+        docker_proc, token, volume_name = start_docker_jupyter()
     except Exception as e:
         print("[agent] startup failed:", e)
         return
@@ -388,7 +402,7 @@ def main():
     # 💤 idle monitor (session-aware - won't kill if LOCKED)
     threading.Thread(
         target=idle_monitor,
-        args=(docker_proc, SESSION_ID),
+        args=(docker_proc, SESSION_ID, volume_name),
         daemon=True
     ).start()
 
@@ -399,6 +413,7 @@ def main():
         print("\n[agent] shutting down")
         docker_proc.terminate()
         cloudflared_proc.terminate()
+        remove_workspace_volume(volume_name)
 
 
 if __name__ == "__main__":
