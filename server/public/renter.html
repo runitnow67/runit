@@ -151,19 +151,25 @@
             .map(
               (session, index) => {
                 const isAbandoned = session.sessionStatus === 'LOCKED_ABANDONED';
+                const isLocked = session.sessionStatus === 'LOCKED';
+                const buttonLabel = isAbandoned ? 'Reconnect' : (isLocked ? 'Release' : 'Connect');
+                const buttonAction = isAbandoned
+                  ? `connectSession('${session.accessToken}')`
+                  : (isLocked ? `releaseSession('${session.accessToken}')` : `connectSession('${session.accessToken}')`);
                 return `
-            <div class="session-card">
+            <div class="session-card" id="card-${session.accessToken}">
               <div class="session-info">
-                <h3>${isAbandoned ? '⏱️ Abandoned - ' : ''}Provider ${index + 1}</h3>
+                <h3>${isAbandoned ? '⏱️ Abandoned - ' : (isLocked ? '🔒 In Use - ' : '')}Provider ${index + 1}</h3>
                 <div class="hardware-details">
                   <strong>GPU:</strong> ${session.hardware?.gpu || "N/A"} | 
                   <strong>RAM:</strong> ${session.hardware?.ram_gb || "?"}GB | 
                   <strong>Price:</strong> $${session.pricing?.hourlyUsd || "?"}​/hr
                   ${isAbandoned ? '<br><small style="color:#ff9800;">⚠️ Connection lost. Reconnect within 10 min or session will be released.</small>' : ''}
+                  ${isLocked ? '<br><small style="color:#4CAF50;">✅ Connected. Use Release to free the session.</small>' : ''}
                 </div>
               </div>
-              <button onclick="this.disabled=true; connectSession('${session.accessToken}')" title="${isAbandoned ? 'Reconnect to abandoned session' : 'Connect to session'}">
-                ${isAbandoned ? 'Reconnect' : 'Connect'}
+              <button id="btn-${session.accessToken}" onclick="${buttonAction}" title="${isAbandoned ? 'Reconnect to abandoned session' : (isLocked ? 'Release session' : 'Connect to session')}">
+                ${buttonLabel}
               </button>
             </div>
           `;
@@ -187,16 +193,13 @@
         // Open Jupyter in new tab/window
         const jupyterWindow = window.open(url, "_blank");
         
-        // Show connected status with Release button
-        const statusDiv = document.createElement('div');
-        statusDiv.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#4CAF50;color:white;padding:15px 20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:9999;';
-        statusDiv.innerHTML = `
-          <strong>✅ Connected!</strong><br>
-          <small>Session active</small><br>
-          <button onclick="releaseCurrentSession()" style="margin-top:8px;background:white;color:#4CAF50;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">Release Session</button>
-          <button onclick="this.parentElement.remove()" style="margin-left:5px;background:rgba(255,255,255,0.3);color:white;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">Dismiss</button>
-        `;
-        document.body.appendChild(statusDiv);
+        // Update card button to Release immediately
+        const btn = document.getElementById(`btn-${accessToken}`);
+        if (btn) {
+          btn.textContent = 'Release';
+          btn.setAttribute('title', 'Release session');
+          btn.setAttribute('onclick', `releaseSession('${accessToken}')`);
+        }
         
         startHeartbeat(accessToken);
         
@@ -211,24 +214,26 @@
                 heartbeatInterval = null;
               }
               currentAccessToken = null;
-              statusDiv.remove();
               // Note: Session stays LOCKED_ABANDONED on server (grace period 10 min)
             }
           }, 2000);
         }
       }
 
-      async function releaseCurrentSession() {
-        if (!currentAccessToken) {
-          alert("No active session to release");
-          return;
+      // Release helper used by card button
+      async function releaseSession(accessToken) {
+        if (!accessToken) return;
+        try {
+          await fetch(`/renter/release/${accessToken}`, { method: 'POST', credentials: 'include' });
+        } catch (err) {
+          console.error('Release failed:', err);
         }
-        await releaseSession(currentAccessToken);
-        currentAccessToken = null;
         if (heartbeatInterval) {
           clearInterval(heartbeatInterval);
           heartbeatInterval = null;
         }
+        currentAccessToken = null;
+        // Refresh list so Connect appears for all
         loadSessions();
       }
 

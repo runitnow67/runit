@@ -287,6 +287,17 @@ app.get("/renter/sessions", requireAuth, async (req, res) => {
        ORDER BY s.created_at DESC`
     );
 
+    // LOCKED sessions for current user (show persistent Release)
+    const { rows: lockedSessions } = await db.query(
+      `SELECT s.session_id, s.access_token, p.hardware, p.pricing, u.name as provider_name, 'LOCKED' as session_status
+       FROM sessions s
+       JOIN providers p ON s.provider_id = p.id
+       JOIN users u ON p.user_id = u.id
+       WHERE s.status = 'LOCKED' AND s.locked_by_user_id = $1
+       ORDER BY s.locked_at DESC`,
+      [userId]
+    );
+
     // LOCKED_ABANDONED sessions for current user (with reconnect option)
     const { rows: abandonedSessions } = await db.query(
       `SELECT s.session_id, s.access_token, p.hardware, p.pricing, u.name as provider_name, 'LOCKED_ABANDONED' as session_status
@@ -300,6 +311,14 @@ app.get("/renter/sessions", requireAuth, async (req, res) => {
 
     const sessions = [
       ...readySessions.map(r => ({
+        sessionId: r.session_id,
+        accessToken: r.access_token,
+        hardware: r.hardware,
+        pricing: r.pricing,
+        providerName: r.provider_name,
+        sessionStatus: r.session_status
+      })),
+      ...lockedSessions.map(r => ({
         sessionId: r.session_id,
         accessToken: r.access_token,
         hardware: r.hardware,
