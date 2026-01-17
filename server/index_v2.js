@@ -33,6 +33,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 
+// Serve static files (renter UI)
+app.use(express.static('public'));
+
 // Session configuration
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
@@ -40,7 +43,9 @@ app.use(session({
   saveUninitialized: false,
   cookie: { 
     secure: process.env.NODE_ENV === 'production',
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    httpOnly: true,
+    sameSite: 'lax'
   }
 }));
 
@@ -143,21 +148,15 @@ app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] 
 app.get('/auth/github/callback',
   passport.authenticate('github', { failureRedirect: '/login' }),
   (req, res) => {
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET || 'dev-secret',
-      { expiresIn: '7d' }
-    );
-    
-    // Redirect to frontend with token
-    res.redirect(`/auth/success?token=${token}`);
+    // Session cookie is automatically set by Passport
+    // Redirect to renter page
+    res.redirect('/renter');
   }
 );
 
 app.get('/auth/logout', (req, res) => {
   req.logout(() => {
-    res.redirect('/');
+    res.redirect('/renter');
   });
 });
 

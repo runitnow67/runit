@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>RUNIT - Available Sessions</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+      .header { 
+        display: flex; 
+        justify-content: space-between; 
+        align-items: center; 
+        margin-bottom: 20px;
+        background: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      h2 { color: #333; margin: 0; }
+      .user-info { display: flex; gap: 12px; align-items: center; }
+      .user-name { font-weight: 500; }
+      .sessions-container { margin-top: 20px; }
+      .session-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+        background-color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      }
+      .session-info { flex: 1; }
+      .session-info h3 { margin: 0 0 10px 0; }
+      .hardware-details { color: #666; font-size: 14px; }
+      button {
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      button:hover { background-color: #45a049; }
+      button:disabled { background-color: #ccc; cursor: not-allowed; }
+      .btn-secondary {
+        background-color: #666;
+      }
+      .btn-secondary:hover {
+        background-color: #555;
+      }
+      .loading { color: #999; font-style: italic; padding: 20px; text-align: center; }
+      .error { color: #d9534f; padding: 20px; text-align: center; }
+      .auth-required {
+        background: white;
+        padding: 40px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      .auth-required h3 { margin-top: 0; }
+      .github-btn {
+        display: inline-block;
+        padding: 12px 24px;
+        background: #24292e;
+        color: white;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: 500;
+      }
+      .github-btn:hover {
+        background: #1a1e21;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h2>RUNIT – Available Jupyter Sessions</h2>
+      <div class="user-info" id="userInfo" style="display:none;">
+        <span class="user-name" id="userName"></span>
+        <button class="btn-secondary" onclick="logout()">Logout</button>
+      </div>
+    </div>
+
+    <div id="authRequired" class="auth-required" style="display:none;">
+      <h3>🔐 Authentication Required</h3>
+      <p>Please log in with GitHub to view available sessions</p>
+      <a href="/auth/github" class="github-btn">Login with GitHub</a>
+    </div>
+
+    <div id="sessions" class="sessions-container">
+      <p class="loading">Loading sessions...</p>
+    </div>
+
+    <script>
+      let currentAccessToken = null;
+      let heartbeatInterval = null;
+      let currentUser = null;
+
+      async function checkAuth() {
+        try {
+          const res = await fetch('/auth/me', { credentials: 'include' });
+          if (res.ok) {
+            currentUser = await res.json();
+            document.getElementById('userName').textContent = currentUser.user.name || currentUser.user.email;
+            document.getElementById('userInfo').style.display = 'flex';
+            document.getElementById('authRequired').style.display = 'none';
+            return true;
+          } else {
+            document.getElementById('authRequired').style.display = 'block';
+            document.getElementById('sessions').style.display = 'none';
+            return false;
+          }
+        } catch (err) {
+          console.error('Auth check failed:', err);
+          document.getElementById('authRequired').style.display = 'block';
+          document.getElementById('sessions').style.display = 'none';
+          return false;
+        }
+      }
+
+      async function logout() {
+        window.location.href = '/auth/logout';
+      }
+
+      async function loadSessions() {
+        try {
+          const res = await fetch('/renter/sessions', { credentials: 'include' });
+
+          if (res.status === 401) {
+            document.getElementById('authRequired').style.display = 'block';
+            document.getElementById('sessions').style.display = 'none';
+            return;
+          }
+
+          if (!res.ok) {
+            document.getElementById("sessions").innerHTML =
+              '<p class="error">Failed to load sessions</p>';
+            return;
+          }
+
+          const sessions = await res.json();
+
+          if (sessions.length === 0) {
+            document.getElementById("sessions").innerHTML =
+              '<p class="error">No sessions available</p>';
+            return;
+          }
+
+          const html = sessions
+            .map(
+              (session, index) =>
+                `
+            <div class="session-card">
+              <div class="session-info">
+                <h3>Provider ${index + 1}</h3>
+                <div class="hardware-details">
+                  <strong>GPU:</strong> ${session.hardware?.gpu || "N/A"} | 
+                  <strong>RAM:</strong> ${session.hardware?.ram_gb || "?"}GB | 
+                  <strong>Price:</strong> $${session.pricing?.hourlyUsd || "?"}​/hr
+                </div>
+              </div>
+              <button onclick="this.disabled=true; connectSession('${session.accessToken}')">
+                Connect
+              </button>
+            </div>
+          `
+            )
+            .join("");
+
+          document.getElementById("sessions").innerHTML = html;
+        } catch (err) {
+          console.error("Error loading sessions:", err);
+          document.getElementById("sessions").innerHTML =
+            '<p class="error">Error loading sessions</p>';
+        }
+      }
+
+      async function connectSession(accessToken) {
+        currentAccessToken = accessToken;
+        
+        const url = `/access/${accessToken}`;
+        
+        // Open Jupyter in new tab/window
+        const jupyterWindow = window.open(url, "_blank");
+        
+        // Show status
+        const statusDiv = document.createElement('div');
+        statusDiv.style.cssText = 'position:fixed;top:20px;right:20px;background:#4CAF50;color:white;padding:15px 20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:9999;';
+        statusDiv.innerHTML = `
+          <strong>✅ Connected!</strong><br>
+          <small>Session will stay active until you close Jupyter</small><br>
+          <button onclick="this.parentElement.remove()" style="margin-top:8px;background:white;color:#4CAF50;border:none;padding:5px 10px;border-radius:4px;cursor:pointer;">OK</button>
+        `;
+        document.body.appendChild(statusDiv);
+        
+        setTimeout(() => statusDiv.remove(), 5000);
+        
+        startHeartbeat(accessToken);
+        
+        // Monitor if Jupyter window is closed, then release
+        if (jupyterWindow) {
+          const checkClosed = setInterval(() => {
+            if (jupyterWindow.closed) {
+              console.log("[renter] Jupyter window closed, releasing session");
+              clearInterval(checkClosed);
+              releaseSession(accessToken);
+              if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+              }
+              currentAccessToken = null;
+            }
+          }, 2000);
+        }
+      }
+
+      function startHeartbeat(accessToken) {
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+        }
+
+        console.log("[renter] Starting heartbeat for session");
+
+        heartbeatInterval = setInterval(async () => {
+          try {
+            const res = await fetch(
+              `/renter/heartbeat/${accessToken}`,
+              { method: "POST", credentials: 'include' }
+            );
+            if (res.ok) {
+              console.log("[renter] ❤️ Heartbeat sent successfully");
+            } else {
+              console.error("[renter] Heartbeat failed:", res.status, await res.text());
+            }
+          } catch (err) {
+            console.error("[renter] Heartbeat error:", err);
+          }
+        }, 30000);
+        
+        fetch(
+          `/renter/heartbeat/${accessToken}`,
+          { method: "POST", credentials: 'include' }
+        ).then(() => console.log("[renter] ❤️ Initial heartbeat sent"));
+      }
+
+      async function releaseSession(accessToken) {
+        if (!accessToken) return;
+        
+        try {
+          await fetch(
+            `/renter/release/${accessToken}`,
+            { method: "POST", keepalive: true, credentials: 'include' }
+          );
+        } catch (err) {
+          console.error("Release failed:", err);
+        }
+      }
+
+      window.addEventListener('beforeunload', () => {
+        if (currentAccessToken) {
+          releaseSession(currentAccessToken);
+        }
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+        }
+      });
+
+      // Initialize
+      (async () => {
+        const isAuth = await checkAuth();
+        if (isAuth) {
+          loadSessions();
+          setInterval(loadSessions, 5000);
+        }
+      })();
+    </script>
+  </body>
+</html>
