@@ -13,8 +13,9 @@ PROVIDER_ID = str(uuid.uuid4())
 
 # Track actual container activity
 LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
-IDLE_TIMEOUT = 2 * 60  # 10 minutes
-SHUTDOWN = False  # Flag to stop heartbeat when container stopsCURRENT_SESSION = {"id": None}  # Shared session ID (updated on re-registration)
+IDLE_TIMEOUT = 2 * 60  # 2 minutes
+SHUTDOWN = False  # Flag to stop heartbeat when container stops
+CURRENT_SESSION = {"id": None}  # Shared session ID (updated on re-registration)
 def ensure_docker_image():
     image_name = "runit-jupyter"
 
