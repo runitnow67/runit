@@ -14,8 +14,7 @@ PROVIDER_ID = str(uuid.uuid4())
 # Track actual container activity
 LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
 IDLE_TIMEOUT = 2 * 60  # 10 minutes
-SHUTDOWN = False  # Flag to stop heartbeat when container stops
-
+SHUTDOWN = False  # Flag to stop heartbeat when container stopsCURRENT_SESSION = {"id": None}  # Shared session ID (updated on re-registration)
 def ensure_docker_image():
     image_name = "runit-jupyter"
 
@@ -146,13 +145,15 @@ def start_cloudflared():
 
 def heartbeat_loop(session_id, payload):
     """Send heartbeats to server. If 404, server restarted - re-register needed."""
-    global SHUTDOWN
+    global SHUTDOWN, CURRENT_SESSION
+    
+    CURRENT_SESSION["id"] = session_id  # Initialize shared session ID
     
     while not SHUTDOWN:  # ✅ Exit loop when shutdown flag is set
         try:
             resp = requests.post(
                 f"{SERVER_URL}/provider/heartbeat",
-                json={"sessionId": session_id},
+                json={"sessionId": CURRENT_SESSION["id"]},  # Use shared session ID
                 timeout=5
             )
             
@@ -168,7 +169,7 @@ def heartbeat_loop(session_id, payload):
                     data = resp.json()
                     new_session_id = data["sessionId"]
                     print("[agent] re-registered with new session ID:", new_session_id)
-                    session_id = new_session_id
+                    CURRENT_SESSION["id"] = new_session_id  # ✅ Update shared session ID
                 except Exception as e:
                     print("[agent] re-registration failed:", e)
             elif resp.status_code != 200:
@@ -211,7 +212,7 @@ def check_container_activity():
 
 def idle_monitor(container_proc, session_id):
     """Monitor idle timeout with actual container activity detection."""
-    global LAST_CONTAINER_ACTIVITY, SHUTDOWN
+    global LAST_CONTAINER_ACTIVITY, SHUTDOWN, CURRENT_SESSION
     
     while True:
         # Check if container is still running
@@ -223,8 +224,9 @@ def idle_monitor(container_proc, session_id):
         # Check if session is locked (in use by a renter)
         session_locked = False
         try:
+            # ✅ Use shared session ID (updated on re-registration)
             res = requests.get(
-                f"{SERVER_URL}/provider/session/{session_id}",
+                f"{SERVER_URL}/provider/session/{CURRENT_SESSION['id']}",
                 timeout=5
             )
             if res.ok:
