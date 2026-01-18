@@ -96,6 +96,7 @@
       let currentAccessToken = null;
       let heartbeatInterval = null;
       let currentUser = null;
+      let jupyterWindow = null;
 
       async function checkAuth() {
         try {
@@ -191,7 +192,7 @@
         const url = `/access/${accessToken}`;
         
         // Open Jupyter in new tab/window
-        const jupyterWindow = window.open(url, "_blank");
+        jupyterWindow = window.open(url, "_blank");
         
         // Update card button to Release immediately
         const btn = document.getElementById(`btn-${accessToken}`);
@@ -214,6 +215,7 @@
                 heartbeatInterval = null;
               }
               currentAccessToken = null;
+              jupyterWindow = null;
               // Note: Session stays LOCKED_ABANDONED on server (grace period 10 min)
             }
           }, 2000);
@@ -228,6 +230,13 @@
         } catch (err) {
           console.error('Release failed:', err);
         }
+        // Close Jupyter tab/window to prevent further use
+        try {
+          if (jupyterWindow && !jupyterWindow.closed) {
+            jupyterWindow.close();
+          }
+        } catch (e) { /* ignore */ }
+        jupyterWindow = null;
         if (heartbeatInterval) {
           clearInterval(heartbeatInterval);
           heartbeatInterval = null;
@@ -266,18 +275,7 @@
         ).then(() => console.log("[renter] ❤️ Initial heartbeat sent"));
       }
 
-      async function releaseSession(accessToken) {
-        if (!accessToken) return;
-        
-        try {
-          await fetch(
-            `/renter/release/${accessToken}`,
-            { method: "POST", keepalive: true, credentials: 'include' }
-          );
-        } catch (err) {
-          console.error("Release failed:", err);
-        }
-      }
+      // (removed duplicate releaseSession definition)
 
       window.addEventListener('beforeunload', () => {
         if (currentAccessToken) {

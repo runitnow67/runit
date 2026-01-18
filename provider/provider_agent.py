@@ -251,7 +251,7 @@ def check_container_activity():
     return False
 
 
-def idle_monitor(container_proc, session_id, volume_name):
+def idle_monitor(container_proc, session_id, volume_name, payload, headers):
     """Monitor idle timeout with actual container activity detection."""
     global LAST_CONTAINER_ACTIVITY, SHUTDOWN, CURRENT_SESSION
     
@@ -271,7 +271,9 @@ def idle_monitor(container_proc, session_id, volume_name):
                 timeout=5
             )
             if res.ok:
-                status = res.json()["status"]
+                info = res.json()
+                status = info.get("status")
+                needs_cleanup = info.get("needs_cleanup", False)
                 if status == "LOCKED":
                     session_locked = True
                     # Check for actual container activity
@@ -279,6 +281,19 @@ def idle_monitor(container_proc, session_id, volume_name):
                         print("[agent] container activity detected")
                     time.sleep(30)
                     continue
+                # If server requested cleanup, stop container immediately
+                if needs_cleanup and status == "READY":
+                    print("[agent] cleanup requested by server, stopping container")
+                    SHUTDOWN = True
+                    try:
+                        container_proc.terminate()
+                        container_proc.wait(timeout=10)
+                        print("[agent] container stopped cleanly")
+                    except subprocess.TimeoutExpired:
+                        print("[agent] container didn't stop gracefully, force killing")
+                        container_proc.kill()
+                        container_proc.wait(timeout=5)
+                    break
         except Exception:
             pass
 
@@ -303,8 +318,56 @@ def idle_monitor(container_proc, session_id, volume_name):
         
         time.sleep(30)
     
-    # Container stopped (idle timeout or crash) -> remove workspace volume
+    # Container stopped (idle timeout, cleanup request, or crash) -> remove workspace volume
     remove_workspace_volume(volume_name)
+
+    # Restart container with fresh volume and re-register session
+    try:
+        new_proc, new_token, new_volume = start_docker_jupyter()
+        print("[agent] started fresh container with new workspace volume")
+
+        # Update payload token and re-register
+        payload["token"] = new_token
+        try:
+            resp = requests.post(
+                f"{SERVER_URL}/provider/session",
+                json=payload,
+                headers=headers,
+                timeout=5
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            old_session_id = session_id
+            new_session_id = data["sessionId"]
+            CURRENT_SESSION["id"] = new_session_id
+            print("[agent] re-registered with new session ID:", new_session_id)
+            # Acknowledge cleanup to retire old session
+            try:
+                requests.post(
+                    f"{SERVER_URL}/provider/session/{old_session_id}/cleanup_ack",
+                    timeout=5
+                )
+            except Exception as e:
+                print("[agent] cleanup_ack failed:", e)
+
+            # Reset shutdown flag and spawn new loops
+            global SHUTDOWN
+            SHUTDOWN = False
+            threading.Thread(
+                target=heartbeat_loop,
+                args=(new_session_id, payload),
+                daemon=True
+            ).start()
+            threading.Thread(
+                target=idle_monitor,
+                args=(new_proc, new_session_id, new_volume, payload, headers),
+                daemon=True
+            ).start()
+            return
+        except Exception as e:
+            print("[agent] re-registration after cleanup failed:", e)
+    except Exception as e:
+        print("[agent] failed to restart container:", e)
 
 def detect_hardware():
     gpu = "CPU"
@@ -451,7 +514,7 @@ def main():
     # 💤 idle monitor (session-aware - won't kill if LOCKED)
     threading.Thread(
         target=idle_monitor,
-        args=(docker_proc, SESSION_ID, volume_name),
+        args=(docker_proc, SESSION_ID, volume_name, payload, headers),
         daemon=True
     ).start()
 
