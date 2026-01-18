@@ -299,25 +299,7 @@ def idle_monitor(container_proc, session_id, volume_name):
         except Exception:
             pass
 
-        # If session is READY (not locked), check idle timeout
-        if not session_locked:
-            idle_time = time.time() - LAST_CONTAINER_ACTIVITY["time"]
-            if idle_time > IDLE_TIMEOUT:
-                print(f"[agent] idle timeout reached ({idle_time:.0f}s), stopping container")
-                SHUTDOWN = True  # ✅ Stop heartbeat before terminating
-                container_proc.terminate()
-                
-                # Wait for container to fully exit before removing volume
-                try:
-                    container_proc.wait(timeout=10)
-                    print("[agent] container stopped cleanly")
-                except subprocess.TimeoutExpired:
-                    print("[agent] container didn't stop gracefully, force killing")
-                    container_proc.kill()
-                    container_proc.wait(timeout=5)
-                
-                break
-        
+        # Agent-side idle shutdown disabled; rely on server-side idle/abandon logic
         time.sleep(30)
     
     # Container stopped (idle timeout, cleanup request, or crash) -> remove workspace volume
@@ -409,13 +391,16 @@ def main():
     
     print(f"[agent] workspace directory: {workspace_dir}")
 
-    # Main loop: restart after cleanup or idle timeout
+    # Main loop: restart after cleanup or crash (idle shutdown disabled)
     while True:
         SHUTDOWN = False  # Reset shutdown flag
         
         try:
             ensure_docker_image()
             docker_proc, token, volume_name = start_docker_jupyter()
+            # Reset activity tracker on each fresh container
+            LAST_CONTAINER_ACTIVITY["time"] = time.time()
+            LAST_CONTAINER_ACTIVITY["prev_net_io"] = None
         except Exception as e:
             print("[agent] startup failed:", e)
             time.sleep(5)
