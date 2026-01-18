@@ -22,6 +22,7 @@ LAST_CONTAINER_ACTIVITY = {"time": time.time(), "prev_net_io": None}
 IDLE_TIMEOUT = 2 * 60  # 2 minutes
 SHUTDOWN = False  # Flag to stop heartbeat when container stops
 CURRENT_SESSION = {"id": None}  # Shared session ID (updated on re-registration)
+HEARTBEAT_THREAD = None  # Track heartbeat thread to allow clean shutdown
 def ensure_docker_image():
     image_name = "runit-jupyter"
 
@@ -460,13 +461,19 @@ def main():
         print("[agent] session registered:", SESSION_ID)
         print("[agent] access token issued (stored server-side)")
 
+        # Ensure old heartbeat thread has exited before starting new one
+        if HEARTBEAT_THREAD is not None:
+            print("[agent] waiting for old heartbeat thread to exit...")
+            HEARTBEAT_THREAD.join(timeout=5)
+
         # ❤️ heartbeat (with auto re-registration if needed)
-        heartbeat_thread = threading.Thread(
+        global HEARTBEAT_THREAD
+        HEARTBEAT_THREAD = threading.Thread(
             target=heartbeat_loop,
             args=(SESSION_ID, payload),
             daemon=True
         )
-        heartbeat_thread.start()
+        HEARTBEAT_THREAD.start()
 
         # 💤 idle monitor (session-aware - won't kill if LOCKED)
         idle_thread = threading.Thread(
@@ -498,9 +505,12 @@ def main():
             remove_workspace_volume(volume_name)
             break
         
-        # Container exited normally - cleanup and restart
+        # Container exited normally - signal threads to stop, then restart
+        print("[agent] signaling threads to stop...")
+        SHUTDOWN = True
+        time.sleep(1)  # Brief pause to allow threads to exit
         print("[agent] preparing to restart with fresh container...")
-        time.sleep(2)  # Brief pause before restart
+        time.sleep(1)  # Brief pause before restart
 
 
 if __name__ == "__main__":
