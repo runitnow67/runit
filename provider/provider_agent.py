@@ -251,9 +251,11 @@ def check_container_activity():
     return False
 
 
-def idle_monitor(container_proc, session_id, volume_name, payload, headers):
+def idle_monitor(container_proc, session_id, volume_name):
     """Monitor idle timeout with actual container activity detection."""
     global LAST_CONTAINER_ACTIVITY, SHUTDOWN, CURRENT_SESSION
+    
+    needs_cleanup = False
     
     while True:
         # Check if container is still running
@@ -282,7 +284,7 @@ def idle_monitor(container_proc, session_id, volume_name, payload, headers):
                     time.sleep(30)
                     continue
                 # If server requested cleanup, stop container immediately
-                if needs_cleanup and status == "READY":
+                if needs_cleanup:
                     print("[agent] cleanup requested by server, stopping container")
                     SHUTDOWN = True
                     try:
@@ -320,53 +322,17 @@ def idle_monitor(container_proc, session_id, volume_name, payload, headers):
     
     # Container stopped (idle timeout, cleanup request, or crash) -> remove workspace volume
     remove_workspace_volume(volume_name)
-
-    # Restart container with fresh volume and re-register session
-    try:
-        new_proc, new_token, new_volume = start_docker_jupyter()
-        print("[agent] started fresh container with new workspace volume")
-
-        # Update payload token and re-register
-        payload["token"] = new_token
+    
+    # If cleanup was requested, acknowledge to server
+    if needs_cleanup:
         try:
-            resp = requests.post(
-                f"{SERVER_URL}/provider/session",
-                json=payload,
-                headers=headers,
+            requests.post(
+                f"{SERVER_URL}/provider/session/{session_id}/cleanup_ack",
                 timeout=5
             )
-            resp.raise_for_status()
-            data = resp.json()
-            old_session_id = session_id
-            new_session_id = data["sessionId"]
-            CURRENT_SESSION["id"] = new_session_id
-            print("[agent] re-registered with new session ID:", new_session_id)
-            # Acknowledge cleanup to retire old session
-            try:
-                requests.post(
-                    f"{SERVER_URL}/provider/session/{old_session_id}/cleanup_ack",
-                    timeout=5
-                )
-            except Exception as e:
-                print("[agent] cleanup_ack failed:", e)
-
-            # Reset shutdown flag and spawn new loops
-            SHUTDOWN = False
-            threading.Thread(
-                target=heartbeat_loop,
-                args=(new_session_id, payload),
-                daemon=True
-            ).start()
-            threading.Thread(
-                target=idle_monitor,
-                args=(new_proc, new_session_id, new_volume, payload, headers),
-                daemon=True
-            ).start()
-            return
+            print("[agent] cleanup acknowledged to server")
         except Exception as e:
-            print("[agent] re-registration after cleanup failed:", e)
-    except Exception as e:
-        print("[agent] failed to restart container:", e)
+            print("[agent] cleanup_ack failed:", e)
 
 def detect_hardware():
     gpu = "CPU"
@@ -420,7 +386,7 @@ def estimate_price(hardware):
 
 
 def main():
-    global LAST_ACTIVITY
+    global SHUTDOWN, CURRENT_SESSION
 
     # 🔒 Ensure workspace directory exists with proper permissions
     workspace_dir = os.path.join(os.getcwd(), "workspace")
@@ -443,98 +409,113 @@ def main():
     
     print(f"[agent] workspace directory: {workspace_dir}")
 
-    try:
-        ensure_docker_image()
-        docker_proc, token, volume_name = start_docker_jupyter()
-    except Exception as e:
-        print("[agent] startup failed:", e)
-        return
-
-    time.sleep(2)
-
-    cloudflared_proc, public_url = start_cloudflared()
-
-    print("\n=== SESSION READY ===")
-    print("URL  :", public_url)
-    print("TOKEN:", token)
-    print("====================\n")
-    
-    hardware = detect_hardware()
-    price_per_hour = estimate_price(hardware)
-    
-    payload = {
-    "providerId": PROVIDER_ID,
-    "publicUrl": public_url,
-    "token": token,
-    "hardware": hardware,
-    "pricing": {
-        "hourlyUsd": price_per_hour
-    }
-}
-
-    # Prepare headers with authentication if token is available
-    headers = {"Content-Type": "application/json"}
-    if AUTH_TOKEN:
-        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
-        print("[agent] using authentication token")
-    else:
-        print("[agent] WARNING: No auth token - server may require authentication!")
-        print("[agent] Set RUNIT_AUTH_TOKEN env var or login at:", f"{SERVER_URL}/auth/github")
-
-    # 🔁 retry registration until success
+    # Main loop: restart after cleanup or idle timeout
     while True:
+        SHUTDOWN = False  # Reset shutdown flag
+        
         try:
-            resp = requests.post(
-                f"{SERVER_URL}/provider/session",
-                json=payload,
-                headers=headers,
-                timeout=5
-            )
-            resp.raise_for_status()
-            break
+            ensure_docker_image()
+            docker_proc, token, volume_name = start_docker_jupyter()
         except Exception as e:
-            print("[agent] registration failed, retrying in 5s...", e)
+            print("[agent] startup failed:", e)
             time.sleep(5)
+            continue
 
-    data = resp.json()
-    SESSION_ID = data["sessionId"]
-    ACCESS_TOKEN = data["accessToken"]
+        time.sleep(2)
 
-    print("[agent] session registered:", SESSION_ID)
-    print("[agent] access token issued (stored server-side)")
+        cloudflared_proc, public_url = start_cloudflared()
 
-    # ❤️ heartbeat (with auto re-registration if needed)
-    threading.Thread(
-        target=heartbeat_loop,
-        args=(SESSION_ID, payload),
-        daemon=True
-    ).start()
+        print("\n=== SESSION READY ===")
+        print("URL  :", public_url)
+        print("TOKEN:", token)
+        print("====================\n")
+        
+        hardware = detect_hardware()
+        price_per_hour = estimate_price(hardware)
+        
+        payload = {
+            "providerId": PROVIDER_ID,
+            "publicUrl": public_url,
+            "token": token,
+            "hardware": hardware,
+            "pricing": {
+                "hourlyUsd": price_per_hour
+            }
+        }
 
-    # 💤 idle monitor (session-aware - won't kill if LOCKED)
-    threading.Thread(
-        target=idle_monitor,
-        args=(docker_proc, SESSION_ID, volume_name, payload, headers),
-        daemon=True
-    ).start()
+        # Prepare headers with authentication if token is available
+        headers = {"Content-Type": "application/json"}
+        if AUTH_TOKEN:
+            headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+            print("[agent] using authentication token")
+        else:
+            print("[agent] WARNING: No auth token - server may require authentication!")
+            print("[agent] Set RUNIT_AUTH_TOKEN env var or login at:", f"{SERVER_URL}/auth/github")
 
-    try:
+        # 🔁 retry registration until success
         while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n[agent] shutting down")
-        docker_proc.terminate()
-        cloudflared_proc.terminate()
-        
-        # Wait for container to fully exit
+            try:
+                resp = requests.post(
+                    f"{SERVER_URL}/provider/session",
+                    json=payload,
+                    headers=headers,
+                    timeout=5
+                )
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                print("[agent] registration failed, retrying in 5s...", e)
+                time.sleep(5)
+
+        data = resp.json()
+        SESSION_ID = data["sessionId"]
+        ACCESS_TOKEN = data["accessToken"]
+        CURRENT_SESSION["id"] = SESSION_ID
+
+        print("[agent] session registered:", SESSION_ID)
+        print("[agent] access token issued (stored server-side)")
+
+        # ❤️ heartbeat (with auto re-registration if needed)
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_loop,
+            args=(SESSION_ID, payload),
+            daemon=True
+        )
+        heartbeat_thread.start()
+
+        # 💤 idle monitor (session-aware - won't kill if LOCKED)
+        idle_thread = threading.Thread(
+            target=idle_monitor,
+            args=(docker_proc, SESSION_ID, volume_name),
+            daemon=True
+        )
+        idle_thread.start()
+
+        # Wait for container to exit (idle timeout or cleanup request)
         try:
-            docker_proc.wait(timeout=10)
-            print("[agent] container stopped cleanly")
-        except subprocess.TimeoutExpired:
-            print("[agent] force killing container")
-            docker_proc.kill()
-            docker_proc.wait(timeout=5)
+            docker_proc.wait()
+            print("[agent] container exited")
+        except KeyboardInterrupt:
+            print("\n[agent] shutting down")
+            SHUTDOWN = True
+            docker_proc.terminate()
+            cloudflared_proc.terminate()
+            
+            # Wait for container to fully exit
+            try:
+                docker_proc.wait(timeout=10)
+                print("[agent] container stopped cleanly")
+            except subprocess.TimeoutExpired:
+                print("[agent] force killing container")
+                docker_proc.kill()
+                docker_proc.wait(timeout=5)
+            
+            remove_workspace_volume(volume_name)
+            break
         
-        remove_workspace_volume(volume_name)
+        # Container exited normally - cleanup and restart
+        print("[agent] preparing to restart with fresh container...")
+        time.sleep(2)  # Brief pause before restart
 
 
 if __name__ == "__main__":

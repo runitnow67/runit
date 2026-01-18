@@ -496,10 +496,10 @@ app.post("/renter/release/:accessToken", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "not authorized" });
     }
 
-    // Unlock session and mark for cleanup
+    // Mark for cleanup but keep LOCKED so no one else can connect during cleanup window
     const { rows: updated } = await db.query(
       `UPDATE sessions 
-       SET status = 'READY', locked_by_user_id = NULL, locked_at = NULL, 
+       SET status = 'CLEANING', locked_by_user_id = NULL, locked_at = NULL, 
            abandoned_at = NULL, last_heartbeat = NULL,
            renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL,
            needs_cleanup = TRUE
@@ -557,9 +557,10 @@ app.post("/provider/session/:sessionId/cleanup_ack", async (req, res) => {
 
     const sessionDbId = rows[0].id;
 
+    // Terminate old session completely - provider will register a new one
     const { rows: updated } = await db.query(
       `UPDATE sessions
-       SET needs_cleanup = FALSE, status = 'TERMINATED', terminated_at = NOW()
+       SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE
        WHERE session_id = $1
        RETURNING id, session_id`,
       [sessionId]
@@ -701,7 +702,7 @@ setInterval(async () => {
     for (const session of expiredAbandoned) {
       await db.query(
         `UPDATE sessions 
-         SET status = 'READY', locked_by_user_id = NULL, locked_at = NULL,
+         SET status = 'CLEANING', locked_by_user_id = NULL, locked_at = NULL,
              abandoned_at = NULL, last_heartbeat = NULL,
              renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL,
              needs_cleanup = TRUE
