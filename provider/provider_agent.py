@@ -461,13 +461,14 @@ def main():
         print("[agent] session registered:", SESSION_ID)
         print("[agent] access token issued (stored server-side)")
 
+        # ❤️ heartbeat (with auto re-registration if needed)
+        global HEARTBEAT_THREAD
+        
         # Ensure old heartbeat thread has exited before starting new one
         if HEARTBEAT_THREAD is not None:
             print("[agent] waiting for old heartbeat thread to exit...")
             HEARTBEAT_THREAD.join(timeout=5)
 
-        # ❤️ heartbeat (with auto re-registration if needed)
-        global HEARTBEAT_THREAD
         HEARTBEAT_THREAD = threading.Thread(
             target=heartbeat_loop,
             args=(SESSION_ID, payload),
