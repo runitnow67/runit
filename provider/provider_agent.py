@@ -351,7 +351,6 @@ def idle_monitor(container_proc, session_id, volume_name, payload, headers):
                 print("[agent] cleanup_ack failed:", e)
 
             # Reset shutdown flag and spawn new loops
-            global SHUTDOWN
             SHUTDOWN = False
             threading.Thread(
                 target=heartbeat_loop,
