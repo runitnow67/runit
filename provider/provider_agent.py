@@ -371,26 +371,10 @@ def estimate_price(hardware):
 def main():
     global SHUTDOWN, CURRENT_SESSION
 
-    # 🔒 Ensure workspace directory exists with proper permissions
-    workspace_dir = os.path.join(os.getcwd(), "workspace")
-    
-    # Clean up any stale Docker volumes if workspace was deleted
-    if not os.path.exists(workspace_dir):
-        print(f"[agent] workspace missing, cleaning up stale containers...")
-        subprocess.run(["docker", "stop", "runit-session"], capture_output=True)
-        subprocess.run(["docker", "rm", "runit-session"], capture_output=True)
-    
-    os.makedirs(workspace_dir, exist_ok=True)
-    
-    # Create a welcome file so Jupyter has something to show
-    welcome_file = os.path.join(workspace_dir, "README.md")
-    if not os.path.exists(welcome_file):
-        with open(welcome_file, "w") as f:
-            f.write("# Welcome to RUNIT\n\n")
-            f.write("This is your persistent workspace.\n\n")
-            f.write("Files saved here will remain even when the container restarts.\n")
-    
-    print(f"[agent] workspace directory: {workspace_dir}")
+    # Using per-session Docker volumes for /workspace; no host workspace needed.
+    # Clean up any stale container from previous runs (best-effort).
+    subprocess.run(["docker", "stop", "runit-session"], capture_output=True)
+    subprocess.run(["docker", "rm", "runit-session"], capture_output=True)
 
     # Main loop: restart after cleanup or crash (idle shutdown disabled)
     while True:
