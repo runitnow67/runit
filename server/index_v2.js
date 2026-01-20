@@ -396,7 +396,8 @@ app.get("/access/:accessToken", requireAuth, async (req, res) => {
       `UPDATE sessions 
        SET status = 'LOCKED', locked_by_user_id = $1, locked_at = NOW(), 
            abandoned_at = NULL, last_heartbeat = NOW(),
-           renter_last_seen = NOW(), renter_ip = $2::inet, renter_id = $1
+           renter_last_seen = NOW(), renter_ip = $2::inet, renter_id = $1,
+           last_status_change = NOW()
        WHERE access_token = $3`,
       [userId, req.ip, accessToken]
     );
@@ -502,7 +503,7 @@ app.post("/renter/release/:accessToken", requireAuth, async (req, res) => {
        SET status = 'CLEANING', locked_by_user_id = NULL, locked_at = NULL, 
            abandoned_at = NULL, last_heartbeat = NULL,
            renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL,
-           needs_cleanup = TRUE
+           needs_cleanup = TRUE, last_status_change = NOW()
        WHERE access_token = $1
        RETURNING session_id, id`,
       [accessToken]
@@ -560,7 +561,7 @@ app.post("/provider/session/:sessionId/cleanup_ack", async (req, res) => {
     // Terminate old session completely - provider will register a new one
     const { rows: updated } = await db.query(
       `UPDATE sessions
-       SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE
+       SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE, last_status_change = NOW()
        WHERE session_id = $1
        RETURNING id, session_id`,
       [sessionId]
@@ -679,7 +680,7 @@ setInterval(async () => {
     for (const session of idleSessions) {
       await db.query(
         `UPDATE sessions 
-         SET status = 'LOCKED_ABANDONED', abandoned_at = NOW()
+         SET status = 'LOCKED_ABANDONED', abandoned_at = NOW(), last_status_change = NOW()
          WHERE id = $1`,
         [session.id]
       );
@@ -705,7 +706,7 @@ setInterval(async () => {
          SET status = 'CLEANING', locked_by_user_id = NULL, locked_at = NULL,
              abandoned_at = NULL, last_heartbeat = NULL,
              renter_last_seen = NULL, renter_ip = NULL, renter_id = NULL,
-             needs_cleanup = TRUE
+             needs_cleanup = TRUE, last_status_change = NOW()
          WHERE id = $1`,
         [session.id]
       );
@@ -728,16 +729,17 @@ setInterval(async () => {
     const staleCleaningThreshold = new Date(now.getTime() - 60 * 1000); // 60 seconds
 
     // Reset CLEANING sessions older than 60 seconds to TERMINATED
+    // Using last_status_change to detect sessions stuck in CLEANING
     const { rows: staleCleaning } = await db.query(
       `SELECT id, session_id FROM sessions 
-       WHERE status = 'CLEANING' AND updated_at < $1`,
+       WHERE status = 'CLEANING' AND last_status_change < $1`,
       [staleCleaningThreshold]
     );
 
     for (const session of staleCleaning) {
       await db.query(
         `UPDATE sessions 
-         SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE
+         SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE, last_status_change = NOW()
          WHERE id = $1`,
         [session.id]
       );
