@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 JUPYTER_PORT = 8888
-SERVER_URL = "https://runit-p5ah.onrender.com"
+SERVER_URL = os.getenv("SERVER_URL", "https://runit-p5ah.onrender.com")
 PROVIDER_ID = str(uuid.uuid4())
 
 # Authentication token (get from: http://localhost:10000/auth/github)
@@ -252,7 +252,7 @@ def check_container_activity():
     return False
 
 
-def idle_monitor(container_proc, session_id, volume_name):
+def idle_monitor(container_proc, cloudflared_proc, session_id, volume_name):
     """Monitor idle timeout with actual container activity detection."""
     global LAST_CONTAINER_ACTIVITY, SHUTDOWN, CURRENT_SESSION
     
@@ -261,8 +261,13 @@ def idle_monitor(container_proc, session_id, volume_name):
     while True:
         # Check if container is still running
         if container_proc.poll() is not None:
-            print("[agent] container has stopped, stopping heartbeat")
+            print("[agent] container has stopped, stopping heartbeat and cloudflared")
             SHUTDOWN = True  # ✅ Signal heartbeat_loop to stop
+            try:
+                cloudflared_proc.terminate()
+                cloudflared_proc.wait(timeout=5)
+            except:
+                pass
             break
 
         # Check if session is locked (in use by a renter)
@@ -288,6 +293,10 @@ def idle_monitor(container_proc, session_id, volume_name):
                 if needs_cleanup:
                     print("[agent] cleanup requested by server, stopping container")
                     SHUTDOWN = True
+                    try:
+                        cloudflared_proc.terminate()
+                    except:
+                        pass
                     try:
                         container_proc.terminate()
                         container_proc.wait(timeout=10)
@@ -463,7 +472,7 @@ def main():
         # 💤 idle monitor (session-aware - won't kill if LOCKED)
         idle_thread = threading.Thread(
             target=idle_monitor,
-            args=(docker_proc, SESSION_ID, volume_name),
+            args=(docker_proc, cloudflared_proc, SESSION_ID, volume_name),
             daemon=True
         )
         idle_thread.start()

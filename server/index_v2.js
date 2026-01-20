@@ -638,11 +638,11 @@ setInterval(async () => {
       console.log("[server] auto-unlocked abandoned session (2hr timeout):", session.session_id);
     }
 
-    // Remove stale sessions (provider offline)
+    // Remove stale sessions (provider offline) - exclude CLEANING status
     const { rows: removed } = await db.query(
       `UPDATE sessions 
        SET status = 'TERMINATED', terminated_at = NOW()
-       WHERE last_seen < $1 AND status != 'TERMINATED'
+       WHERE last_seen < $1 AND status NOT IN ('TERMINATED', 'CLEANING')
        RETURNING session_id, id`,
       [new Date(now - SESSION_TTL)]
     );
@@ -718,6 +718,39 @@ setInterval(async () => {
     }
   } catch (err) {
     console.error("[server] session cleanup job error:", err);
+  }
+}, 30 * 1000); // Run every 30 seconds
+
+// Background job: Cleanup stale CLEANING sessions (provider crashed during cleanup)
+setInterval(async () => {
+  try {
+    const now = new Date();
+    const staleCleaningThreshold = new Date(now.getTime() - 60 * 1000); // 60 seconds
+
+    // Reset CLEANING sessions older than 60 seconds to TERMINATED
+    const { rows: staleCleaning } = await db.query(
+      `SELECT id, session_id FROM sessions 
+       WHERE status = 'CLEANING' AND updated_at < $1`,
+      [staleCleaningThreshold]
+    );
+
+    for (const session of staleCleaning) {
+      await db.query(
+        `UPDATE sessions 
+         SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE
+         WHERE id = $1`,
+        [session.id]
+      );
+      await db.query(
+        `INSERT INTO session_history (session_id, event_type, metadata)
+         VALUES ($1, 'terminated', $2)`,
+        [session.id, JSON.stringify({ reason: 'stale_cleaning_timeout' })]
+      );
+      logSecurityEvent("STALE_CLEANING_TERMINATED", { sessionId: session.session_id });
+      console.log("[server] terminated stale CLEANING session:", session.session_id);
+    }
+  } catch (err) {
+    console.error("[server] stale CLEANING cleanup error:", err);
   }
 }, 30 * 1000); // Run every 30 seconds
 
