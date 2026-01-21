@@ -23,6 +23,7 @@ IDLE_TIMEOUT = 2 * 60  # 2 minutes
 SHUTDOWN = False  # Flag to stop heartbeat when container stops
 CURRENT_SESSION = {"id": None}  # Shared session ID (updated on re-registration)
 HEARTBEAT_THREAD = None  # Track heartbeat thread to allow clean shutdown
+HEARTBEAT_TOKEN = 0  # Incremental token to ensure only one heartbeat thread is active
 def ensure_docker_image():
     image_name = "runit-jupyter"
 
@@ -185,13 +186,13 @@ def remove_workspace_volume(volume_name):
         print(f"[agent] error removing volume {volume_name}: {e}")
 
 
-def heartbeat_loop(session_id, payload):
+def heartbeat_loop(session_id, payload, run_token):
     """Send heartbeats to server. If 404, server restarted - re-register needed."""
-    global SHUTDOWN, CURRENT_SESSION
+    global SHUTDOWN, CURRENT_SESSION, HEARTBEAT_TOKEN
     
     CURRENT_SESSION["id"] = session_id  # Initialize shared session ID
     
-    while not SHUTDOWN:  # ✅ Exit loop when shutdown flag is set
+    while not SHUTDOWN and run_token == HEARTBEAT_TOKEN:  # ✅ Exit if shutdown or superseded
         try:
             resp = requests.post(
                 f"{SERVER_URL}/provider/heartbeat",
@@ -455,8 +456,10 @@ def main():
         print("[agent] access token issued (stored server-side)")
 
         # ❤️ heartbeat (with auto re-registration if needed)
-        global HEARTBEAT_THREAD
-        
+        global HEARTBEAT_THREAD, HEARTBEAT_TOKEN
+        HEARTBEAT_TOKEN += 1
+        run_token = HEARTBEAT_TOKEN
+
         # Ensure old heartbeat thread has exited before starting new one
         if HEARTBEAT_THREAD is not None:
             print("[agent] waiting for old heartbeat thread to exit...")
@@ -464,7 +467,7 @@ def main():
 
         HEARTBEAT_THREAD = threading.Thread(
             target=heartbeat_loop,
-            args=(SESSION_ID, payload),
+            args=(SESSION_ID, payload, run_token),
             daemon=True
         )
         HEARTBEAT_THREAD.start()
