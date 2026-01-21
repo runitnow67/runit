@@ -582,6 +582,48 @@ app.post("/provider/session/:sessionId/cleanup_ack", async (req, res) => {
   }
 });
 
+// Provider voluntary shutdown notification
+app.post("/provider/session/:sessionId/shutdown", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { rows } = await db.query(
+      'SELECT id, session_id, status FROM sessions WHERE session_id = $1',
+      [sessionId]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'not found' });
+    }
+
+    const sessionDbId = rows[0].id;
+    const currentStatus = rows[0].status;
+
+    // Only terminate if not already terminated
+    if (currentStatus !== 'TERMINATED') {
+      await db.query(
+        `UPDATE sessions
+         SET status = 'TERMINATED', terminated_at = NOW(), needs_cleanup = FALSE, last_status_change = NOW()
+         WHERE session_id = $1`,
+        [sessionId]
+      );
+
+      await db.query(
+        `INSERT INTO session_history (session_id, event_type, metadata)
+         VALUES ($1, 'terminated', $2)`,
+        [sessionDbId, JSON.stringify({ reason: 'provider_shutdown' })]
+      );
+
+      logSecurityEvent("PROVIDER_SHUTDOWN", { sessionId });
+      console.log('[server] provider voluntary shutdown:', sessionId);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[server] shutdown notification error:', err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
 // Provider heartbeat (no auth required for backward compatibility)
 app.post("/provider/heartbeat", async (req, res) => {
   try {
@@ -601,7 +643,7 @@ app.post("/provider/heartbeat", async (req, res) => {
       return res.status(404).json({ error: "unknown session - re-register required" });
     }
 
-    const { rows: count } = await db.query("SELECT COUNT(*) FROM sessions WHERE status IN ('READY', 'LOCKED')");
+    const { rows: count } = await db.query("SELECT COUNT(*) FROM sessions WHERE status IN ('READY', 'LOCKED', 'LOCKED_ABANDONED')");
     console.log("[server] heartbeat updated for:", sessionId, "| Total active sessions:", count[0].count);
     res.json({ ok: true });
   } catch (err) {

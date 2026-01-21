@@ -186,7 +186,7 @@ def remove_workspace_volume(volume_name):
         print(f"[agent] error removing volume {volume_name}: {e}")
 
 
-def heartbeat_loop(session_id, payload, run_token):
+def heartbeat_loop(session_id, payload, headers, run_token):
     """Send heartbeats to server. If 404, server restarted - re-register needed."""
     global SHUTDOWN, CURRENT_SESSION, HEARTBEAT_TOKEN
     
@@ -206,6 +206,7 @@ def heartbeat_loop(session_id, payload, run_token):
                     resp = requests.post(
                         f"{SERVER_URL}/provider/session",
                         json=payload,
+                        headers=headers,  # ✅ Include auth headers
                         timeout=5
                     )
                     resp.raise_for_status()
@@ -320,7 +321,7 @@ def idle_monitor(container_proc, cloudflared_proc, session_id, volume_name):
     if needs_cleanup:
         try:
             requests.post(
-                f"{SERVER_URL}/provider/session/{session_id}/cleanup_ack",
+                f"{SERVER_URL}/provider/session/{CURRENT_SESSION['id']}/cleanup_ack",  # ✅ Use current session ID
                 timeout=5
             )
             print("[agent] cleanup acknowledged to server")
@@ -467,7 +468,7 @@ def main():
 
         HEARTBEAT_THREAD = threading.Thread(
             target=heartbeat_loop,
-            args=(SESSION_ID, payload, run_token),
+            args=(SESSION_ID, payload, headers, run_token),  # ✅ Pass headers for re-registration
             daemon=True
         )
         HEARTBEAT_THREAD.start()
@@ -500,6 +501,18 @@ def main():
                 docker_proc.wait(timeout=5)
             
             remove_workspace_volume(volume_name)
+            
+            # ✅ Notify server of voluntary shutdown
+            try:
+                requests.post(
+                    f"{SERVER_URL}/provider/session/{CURRENT_SESSION['id']}/shutdown",
+                    headers=headers,
+                    timeout=5
+                )
+                print("[agent] shutdown notification sent to server")
+            except Exception as e:
+                print("[agent] shutdown notification failed:", e)
+            
             break
         
         # Container exited normally - signal threads to stop, then restart
