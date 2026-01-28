@@ -1,0 +1,27 @@
+{
+  "package": {
+    "productName": "ProviderApp",
+    "version": "0.0.1"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "title": "Runit Provider",
+        "width": 1200,
+        "height": 800,
+        "resizable": true
+      }
+    ],
+    "bundle": {
+      "active": true,
+      "identifier": "com.runit.provider",
+      "icon": []
+    }
+  },
+  "build": {
+    "beforeDevCommand": "npm run vite",
+    "beforeBuildCommand": "npm run vite -- build",
+    "devPath": "http://localhost:5173",
+    "distDir": "../dist"
+  }
+}
